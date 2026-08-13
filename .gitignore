@@ -9,3 +9,4 @@ data/csv
 data/ssb_generator
 __pycache__
 results.csv
+.python-version
