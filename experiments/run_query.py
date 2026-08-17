@@ -202,7 +202,7 @@ def main():
             q = queries_dict[query]
             query_tcp_msg = q(planId=pid, src_uuid=src_uuid, target_uuid=tgt_uuid, scale_factor=scale_factor, extendedResult=False)
             result_tuple = run_one_query(client=client, query_msg=query_tcp_msg, query_idx=idx)
-            print(result_tuple)
+            print(f"Query: {query} with plan id {result_tuple[0]} {"was SUCCESSFUL" if result_tuple[1] else "FAILED"}.")
     finally:
         client.disconnect()
 
