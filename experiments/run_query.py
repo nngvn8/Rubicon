@@ -15,6 +15,7 @@ from proto import WorkRequest_pb2 as WorkRequest
 from proto import WorkResponse_pb2 as WorkResponse
 
 from proto import ConfigurationRequests_pb2 as ConfigurationRequests
+from proto import QueryPlan_pb2 as QueryPlan
 
 from proto.UnitDefinition_pb2 import TcpPackageType, UnitType
 
@@ -132,7 +133,29 @@ def set_workers_for_compute_units(client: tcp_client.TCPClient, workers: int):
         )
         client.send_message(work)
 
-def run_one_query(client: tcp_client.TCPClient, query_msg: msg.TCPMessage, query_idx: int) -> Tuple[int, bool, float, float, float]:
+
+def load_query_plan_from_pb(pb_file_path: str, src_uuid: int = 0, target_uuid: int = 0) -> msg.TCPMessage:
+    # 1. Load the raw QueryPlan protobuf from disk
+    qplan = QueryPlan.QueryPlan()
+    with open(pb_file_path, "rb") as f:
+        qplan.ParseFromString(f.read())
+
+    # 2. Wrap it in a WorkRequest
+    request = WorkRequest.WorkRequest()
+    request.queryPlan.CopyFrom(qplan)
+
+    # 3. Wrap it in a TCPMessage
+    plan = msg.TCPMessage(
+        unit_type=UnitType.QUERY_PLANER,
+        package_type=TcpPackageType.QUERY_PLAN,
+        src_uuid=src_uuid,
+        tgt_uuid=target_uuid
+    )
+    plan.payload = request.SerializeToString()
+    
+    return plan
+
+def run_one_query(client: tcp_client.TCPClient, query_msg: msg.TCPMessage) -> Tuple[int, bool, float, float, float]:
     """Returns (plan_id, success, start_ts, end_ts, elapsed_s)."""
     req = WorkRequest.WorkRequest()
     req.ParseFromString(query_msg.payload)
@@ -159,6 +182,7 @@ def main():
     parser.add_argument("-info", default="Sequentially running a set of querries")
     parser.add_argument("-name", default="Sequentially running a set of querries client")
     parser.add_argument('-q', help='Which quer[ies] to run. If multiple queries are given, write as CSV.', default=False, required=False)
+    parser.add_argument('-f', help='Folder to read queries from.', default='/home/mschmidt/rubi-test-2/Rubicon/data/plans')
     parser.add_argument("--out", default="results/run_query")    # Output
 
 
@@ -172,6 +196,11 @@ def main():
     if args.q:
         qs = args.q.split(",")
         query_list.extend([query.strip() for query in qs])
+    elif args.f:
+        path = Path(args.f)
+        for filename in path.iterdir():
+            if filename.suffix == ".pb":
+                query_list.append(str(filename))
     else:
         query_list = queries_dict.keys()
 
@@ -189,19 +218,25 @@ def main():
 
     # Run queries
     try:
-        for idx, query in enumerate(query_list):
-            out_dir = out_dir / query
+        for query in query_list:
+            out_dir = out_dir/ query.split("/")[-1] if args.f else out_dir /query
             out_dir.mkdir(parents=True, exist_ok=True)
             
             # Discover CU + set workers
             src_uuid, tgt_uuid = discover_compute_unit(client)
             set_workers_for_compute_units(client, workers_per_cu)
             time.sleep(1.0)
-
-            pid = new_uint32_id()
-            q = queries_dict[query]
-            query_tcp_msg = q(planId=pid, src_uuid=src_uuid, target_uuid=tgt_uuid, scale_factor=scale_factor, extendedResult=False)
-            result_tuple = run_one_query(client=client, query_msg=query_tcp_msg, query_idx=idx)
+            
+            # Generate TCP message
+            if args.f:
+                query_tcp_msg = load_query_plan_from_pb(query, src_uuid=src_uuid, target_uuid=tgt_uuid)
+            else: 
+                pid = new_uint32_id()
+                q = queries_dict[query]
+                query_tcp_msg = q(planId=pid, src_uuid=src_uuid, target_uuid=tgt_uuid, scale_factor=scale_factor, extendedResult=False)
+            
+            # Run query
+            result_tuple = run_one_query(client=client, query_msg=query_tcp_msg)
             print(f"Query: {query} with plan id {result_tuple[0]} {"was SUCCESSFUL" if result_tuple[1] else "FAILED"}.")
     finally:
         client.disconnect()

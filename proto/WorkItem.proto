@@ -115,7 +115,16 @@ message MultiGroupItem {
 message JoinItem {
   optional ColumnMessage innerColumn = 1;
   optional ColumnMessage outerColumn = 2;
-  optional ColumnMessage outputColumn = 3;
+  optional ColumnMessage iOutputColumn = 3;
+  optional ColumnMessage oOutputColumn = 4;
+  optional CompType joinPredicate = 9;
+}
+
+message SemiJoinItem {
+  optional ColumnMessage innerColumn = 1;
+  optional ColumnMessage outerColumn = 2;
+  optional ColumnMessage iOutputColumn = 3;
+  optional ColumnMessage oOutputColumn = 4;
   optional CompType joinPredicate = 9;
 }
 
@@ -185,16 +194,17 @@ message WorkItem {
   oneof opData {
     FilterItem filterData = 6;
     JoinItem joinData = 7;
-    AggItem aggData = 8;
-    SortItem sortData = 9;
-    MapItem mapData = 10;
-    MaterializeItem materializeData = 11;
-    SetOperationItem setData = 12;
-    FetchItem fetchData = 13;
-    MultiGroupItem multiGroupData = 14;
-    ResultItem resultData = 15;
-    DataTransferItem transferData = 16;
+    SemiJoinItem semiJoinData = 8;
+    AggItem aggData = 9;
+    SortItem sortData = 10;
+    MapItem mapData = 11;
+    MaterializeItem materializeData = 12;
+    SetOperationItem setData = 13;
+    FetchItem fetchData = 14;
+    MultiGroupItem multiGroupData = 15;
+    ResultItem resultData = 16;
+    DataTransferItem transferData = 17;
   }
-  repeated uint32 dependsOn = 17;
-  optional bool returnExtendedResult = 18;
+  repeated uint32 dependsOn = 18;
+  optional bool returnExtendedResult = 19;
 }

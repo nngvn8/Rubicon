@@ -70,7 +70,8 @@ WorkItem Utility::generateRandomWorkItem(bool verbose) {
         JoinItem* join = item.mutable_joindata();
         ColumnMessage* innerCol = join->mutable_innercolumn();
         ColumnMessage* outerCol = join->mutable_outercolumn();
-        ColumnMessage* outputCol = join->mutable_outputcolumn();
+        ColumnMessage* ioutputCol = join->mutable_ioutputcolumn();
+        ColumnMessage* ooutputCol = join->mutable_ooutputcolumn();
 
         innerCol->set_tabname(tuddbs::Utility::generateRandomString());
         innerCol->set_colname(tuddbs::Utility::generateRandomString());
@@ -80,9 +81,13 @@ WorkItem Utility::generateRandomWorkItem(bool verbose) {
         outerCol->set_colname(tuddbs::Utility::generateRandomString());
         outerCol->set_coltype(static_cast<ColumnType>(tuddbs::Utility::generateRandomNumber(0, 4)));
 
-        outputCol->set_tabname(tuddbs::Utility::generateRandomString());
-        outputCol->set_colname(tuddbs::Utility::generateRandomString());
-        outputCol->set_coltype(static_cast<ColumnType>(5));
+        ioutputCol->set_tabname(tuddbs::Utility::generateRandomString());
+        ioutputCol->set_colname(tuddbs::Utility::generateRandomString());
+        ioutputCol->set_coltype(static_cast<ColumnType>(5));
+
+        ooutputCol->set_tabname(tuddbs::Utility::generateRandomString());
+        ooutputCol->set_colname(tuddbs::Utility::generateRandomString());
+        ooutputCol->set_coltype(static_cast<ColumnType>(5));
 
         join->set_joinpredicate(static_cast<CompType>(tuddbs::Utility::generateRandomNumber(0, 5)));
     }

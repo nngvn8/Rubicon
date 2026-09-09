@@ -129,8 +129,8 @@ class HashJoinOperator : public AbstractOperator {
         resColumnOuter->setDataPtr(static_cast<void *>(join_result_id_b));
 
         LOG_DEBUG1("[HashJoinOperator] My result has " << join_result << " elements." << std::endl;)
-        DataCatalog::getInstance().addColumn(joinData.outputcolumn().tabname(), joinData.outputcolumn().colname() + "_i", resColumnInner);
-        DataCatalog::getInstance().addColumn(joinData.outputcolumn().tabname(), joinData.outputcolumn().colname() + "_o", resColumnOuter);
+        DataCatalog::getInstance().addColumn(joinData.ioutputcolumn().tabname(), joinData.ioutputcolumn().colname(), resColumnInner);
+        DataCatalog::getInstance().addColumn(joinData.ooutputcolumn().tabname(), joinData.ooutputcolumn().colname(), resColumnOuter);
 
         return join_result;
     }

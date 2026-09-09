@@ -221,8 +221,11 @@ inline std::vector<const ColumnMessage*> getOutputColumns(const WorkItem& item) 
             break;
 
         case WorkItem::kJoinData:
-            if (item.joindata().has_outputcolumn()) {
-                outputs.push_back(&item.joindata().outputcolumn());
+            if (item.joindata().has_ioutputcolumn()) {
+                outputs.push_back(&item.joindata().ioutputcolumn());
+            }
+            if (item.joindata().has_ooutputcolumn()) {
+                outputs.push_back(&item.joindata().ooutputcolumn());
             }
             break;
 
