@@ -55,7 +55,8 @@ def plan_finished_cb(message: msg.TCPMessage):
     global complete_condition, complete_plans
     response: WorkResponse.PlanResponse = WorkResponse.PlanResponse()
     response.ParseFromString(message.payload)
-    # print(f"[DEBUG] plan_finished_cb: planId={response.planId}")
+    if response.info:
+        print(f"[PlanResponse Info]\n{response.info}")
 
     with complete_condition:
         complete_plans[response.planId] = response.success
