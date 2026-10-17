@@ -5,7 +5,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED On)
 set(warnings "-Wall -Wextra -pedantic -Wcast-align -Wcast-qual -Wctor-dtor-privacy -Wdisabled-optimization -Wformat=2 -Winit-self -Wlogical-op -Wmissing-include-dirs -Wnoexcept -Wold-style-cast -Woverloaded-virtual -Wredundant-decls -Wshadow -Wsign-promo -Wstrict-null-sentinel -Wstrict-overflow=5 -Wundef -Wno-unused -Wno-variadic-macros -Wno-parentheses -fdiagnostics-show-option")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${warnings}")
-set(OPTIMIZE_OPTIONS -O3 -g)
+# set(OPTIMIZE_OPTIONS -O3 -g) # commented out for debugging
+set(OPTIMIZE_OPTIONS -O0 -g) # added for debugging
 set(CMAKE_VERBOSE_MAKEFILE On)
 
 add_compile_options("${OPTIMIZE_OPTIONS}")
