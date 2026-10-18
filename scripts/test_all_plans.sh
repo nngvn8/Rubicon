@@ -7,7 +7,7 @@ set -uo pipefail
 #          restarting ComputeUnit (CU) for each plan, and report success/failure.
 # ==============================================================================
 
-RUBICON_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RUBICON_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PB_PLANS_DIR="${RUBICON_ROOT}/data/pb_plans"
 PLANS_DIR="${RUBICON_ROOT}/data/plans"
 EXPERIMENTS_DIR="${RUBICON_ROOT}/experiments"
@@ -15,7 +15,7 @@ EXPERIMENTS_DIR="${RUBICON_ROOT}/experiments"
 GRP_SCRIPT="${HOME}/start_rubi_grp.sh"
 CU_SCRIPT="${HOME}/start_rubi_cu.sh"
 
-TIMEOUT_SECONDS=60
+TIMEOUT_SECONDS=10
 VERBOSE=false
 
 # Formatting
@@ -32,7 +32,7 @@ usage() {
     echo ""
     echo "Options:"
     echo "  -v, --verbose       Print full output from run_query.py for every test"
-    echo "  -t, --timeout <sec> Per-query timeout in seconds (default: 60)"
+    echo "  -t, --timeout <sec> Per-query timeout in seconds (default: 10)"
     echo "  -h, --help          Show this help message"
     exit 0
 }
@@ -202,13 +202,14 @@ for PLAN_PATH in "${PLAN_FILES[@]}"; do
     echo -e "    ${BLUE}==>${NC} Running query (timeout: ${TIMEOUT_SECONDS}s)..."
     CMD_OUTPUT=""
     EXIT_CODE=0
-    CMD_OUTPUT=$(cd "${EXPERIMENTS_DIR}" && timeout "${TIMEOUT_SECONDS}" uv run run_query.py 2>&1) || EXIT_CODE=$?
+    CMD_OUTPUT=$(cd "${EXPERIMENTS_DIR}" && timeout "${TIMEOUT_SECONDS}" uv run run_query.py -f "${PLANS_DIR}" 2>&1) || EXIT_CODE=$?
 
-    # 4. Check for success in the output
+    # 4. Check the canonical PlanResponse.info success marker and exit code.
+    # ComputeUnit emits this exact line only for a fully completed plan.
     if [[ ${EXIT_CODE} -eq 124 ]]; then
         echo -e "    ${RED}[FAILED]${NC} Query timed out after ${TIMEOUT_SECONDS}s."
         FAILED_PLANS+=("${PLAN_NAME} (Timed out)")
-    elif echo "${CMD_OUTPUT}" | grep -q "was SUCCESSFUL"; then
+    elif [[ ${EXIT_CODE} -eq 0 ]] && grep -Fxq "Plan completed successfully." <<< "${CMD_OUTPUT}"; then
         echo -e "    ${GREEN}[SUCCESS]${NC} Query completed successfully."
         SUCCESSFUL_PLANS+=("${PLAN_NAME}")
     else
@@ -221,7 +222,7 @@ for PLAN_PATH in "${PLAN_FILES[@]}"; do
         echo -e "    --- Output ---"
         echo "${CMD_OUTPUT}" | sed 's/^/    /'
         echo -e "    --------------"
-    elif ! echo "${CMD_OUTPUT}" | grep -q "was SUCCESSFUL"; then
+    elif ! grep -Fxq "Plan completed successfully." <<< "${CMD_OUTPUT}"; then
         echo -e "    --- Failure snippet ---"
         echo "${CMD_OUTPUT}" | tail -n 10 | sed 's/^/    /'
         echo -e "    -----------------------"

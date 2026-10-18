@@ -17,7 +17,7 @@ def create_query_plan(**kwargs) -> msg.TCPMessage:
     request = WorkRequest.WorkRequest()
     request.queryPlan.CopyFrom(qplan)
     plan.payload = request.SerializeToString()
-    return plan
+    return plan, qplan
     
 
 def create_work_item(**kwargs) -> WorkItem.WorkItem:

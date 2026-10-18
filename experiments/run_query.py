@@ -1,9 +1,13 @@
 import argparse
+import json
+import sys
 import threading
 import time
 from datetime import datetime
 from typing import List, Optional, Tuple, Dict
 from pathlib import Path
+
+from google.protobuf.json_format import MessageToDict
 
 from utils import msg
 from utils import client as tcp_client
@@ -29,8 +33,14 @@ uuid_list: List[int] = []
 
 uuid_condition = threading.Condition()
 
-complete_plans: Dict[int, bool] = {}
+complete_plans: Dict[int, WorkResponse.PlanResponse] = {}
 complete_condition = threading.Condition()
+
+# ComputeUnit uses this exact terminal PlanResponse.info value only after a
+# complete plan reaches its ResultOperator. Failed plans receive a different
+# diagnostic message (or no response on a transport failure), so this is the
+# wire-level success contract used by this script.
+PLAN_SUCCESS_INFO = "Plan completed successfully."
 
 config_replies: List[bool] = []
 config_condition = threading.Condition()
@@ -55,11 +65,8 @@ def plan_finished_cb(message: msg.TCPMessage):
     global complete_condition, complete_plans
     response: WorkResponse.PlanResponse = WorkResponse.PlanResponse()
     response.ParseFromString(message.payload)
-    if response.info:
-        print(f"[PlanResponse Info]\n{response.info}")
-
     with complete_condition:
-        complete_plans[response.planId] = response.success
+        complete_plans[response.planId] = response
         complete_condition.notify_all()
 
 
@@ -82,10 +89,10 @@ def wait_next_completion(client, plan_id, timeout=300.0):
             remaining = deadline - time.time()
             if remaining <= 0:
                 print(f"[Warn] Timeout waiting for plan_id={plan_id}")
-                return False
+                return None
             complete_condition.wait(timeout=remaining)
 
-        return complete_plans.get(plan_id, False)
+        return complete_plans.get(plan_id, None)
 
 
 def wait_for_config_reply(client: tcp_client.TCPClient) -> Optional[bool]:
@@ -135,39 +142,68 @@ def set_workers_for_compute_units(client: tcp_client.TCPClient, workers: int):
         client.send_message(work)
 
 
-def load_query_plan_from_pb(pb_file_path: str, src_uuid: int = 0, target_uuid: int = 0) -> msg.TCPMessage:
+def load_query_plan_from_pb(pb_file_path: str, src_uuid: int = 0, target_uuid: int = 0, extended_results: bool = False) -> msg.TCPMessage:
     # 1. Load the raw QueryPlan protobuf from disk
     qplan = QueryPlan.QueryPlan()
     with open(pb_file_path, "rb") as f:
         qplan.ParseFromString(f.read())
+
+    for item in qplan.planitems:
+        item.returnExtendedResult = extended_results
 
     # 2. Wrap it in a WorkRequest
     request = WorkRequest.WorkRequest()
     request.queryPlan.CopyFrom(qplan)
 
     # 3. Wrap it in a TCPMessage
-    plan = msg.TCPMessage(
+    tcp_msg = msg.TCPMessage(
         unit_type=UnitType.QUERY_PLANER,
         package_type=TcpPackageType.QUERY_PLAN,
         src_uuid=src_uuid,
         tgt_uuid=target_uuid
     )
-    plan.payload = request.SerializeToString()
+    tcp_msg.payload = request.SerializeToString()
     
-    return plan
+    return tcp_msg, qplan
 
-def run_one_query(client: tcp_client.TCPClient, query_msg: msg.TCPMessage) -> Tuple[int, bool, float, float, float]:
-    """Returns (plan_id, success, start_ts, end_ts, elapsed_s)."""
+def run_one_query(client: tcp_client.TCPClient, query_msg: msg.TCPMessage) -> Optional[WorkResponse.PlanResponse]:
+    """Submit a plan and return its terminal response, if one arrives."""
     req = WorkRequest.WorkRequest()
     req.ParseFromString(query_msg.payload)
     plan_id = req.queryPlan.planid
 
     t_s = datetime.now()
     client.send_message(query_msg)
-    success = wait_next_completion(client, plan_id)
+    plan_response = wait_next_completion(client, plan_id)
     t_e = datetime.now()
+    total_response_time = (t_e - t_s).total_seconds()
 
-    return plan_id, success, t_s.timestamp(), t_e.timestamp(), (t_e - t_s).total_seconds()
+    return plan_response
+
+
+def enrich_query_plan(query_plan: QueryPlan.QueryPlan, plan_response: WorkResponse.PlanResponse) -> Dict:
+    ext_results = {
+        ext.itemId: {
+            "itemId": ext.itemId,
+            "start": ext.start,
+            "end": ext.end,
+            "rowCount": ext.rowCount,
+        }
+        for ext in plan_response.extendedResults
+    }
+
+    enriched_plan = MessageToDict(query_plan, preserving_proto_field_name=True)
+    enriched_plan["success"] = plan_response.success
+    enriched_plan["info"] = plan_response.info
+
+    orig_items = {item.itemId: item for item in query_plan.planitems}
+    for item_dict in enriched_plan["planitems"]:
+        item_id = item_dict["itemId"]
+        if orig_items[item_id].returnExtendedResult and item_id in ext_results:
+            item_dict["extendedResult"] = ext_results[item_id]
+            item_dict.pop("returnExtendedResult", None)
+
+    return enriched_plan
 
 # ----------------------------
 # Main
@@ -215,13 +251,14 @@ def main():
     # Extract relevant args
     workers_per_cu = args.workers_per_cu
     scale_factor = args.scale_factor
-    out_dir = Path(args.out)
+    out_dir_base = Path(args.out)
 
     # Run queries
+    all_succeeded = True
     try:
         for query in query_list:
-            out_dir = out_dir/ query.split("/")[-1] if args.f else out_dir /query
-            out_dir.mkdir(parents=True, exist_ok=True)
+            target_out_dir = out_dir_base / (Path(query).name if args.f else query)
+            target_out_dir.mkdir(parents=True, exist_ok=True)
             
             # Discover CU + set workers
             src_uuid, tgt_uuid = discover_compute_unit(client)
@@ -230,17 +267,28 @@ def main():
             
             # Generate TCP message
             if args.f:
-                query_tcp_msg = load_query_plan_from_pb(query, src_uuid=src_uuid, target_uuid=tgt_uuid)
+                query_tcp_msg, query_plan = load_query_plan_from_pb(query, src_uuid=src_uuid, target_uuid=tgt_uuid, extended_results=True)
             else: 
                 pid = new_uint32_id()
                 q = queries_dict[query]
-                query_tcp_msg = q(planId=pid, src_uuid=src_uuid, target_uuid=tgt_uuid, scale_factor=scale_factor, extendedResult=False)
+                query_tcp_msg, query_plan = q(planId=pid, src_uuid=src_uuid, target_uuid=tgt_uuid, scale_factor=scale_factor, extendedResult=True)
             
             # Run query
-            result_tuple = run_one_query(client=client, query_msg=query_tcp_msg)
-            print(f"Query: {query} with plan id {result_tuple[0]} {"was SUCCESSFUL" if result_tuple[1] else "FAILED"}.")
+            plan_response = run_one_query(client=client, query_msg=query_tcp_msg)
+
+            if plan_response is None or plan_response.info != PLAN_SUCCESS_INFO:
+                all_succeeded = False
+
+            if plan_response is not None:
+                print(plan_response.info)
+            else:
+                print(f"Query {query} FAILED: no plan response received")
+
     finally:
         client.disconnect()
+
+    if not all_succeeded:
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
