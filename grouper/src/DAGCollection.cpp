@@ -322,6 +322,21 @@ QueryPlan& DagCollection::renameTableNames(
                 const auto& outer = witem->joindata().outercolumn();
                 tryReplace(outer.tabname(), outer.colname(), witem->mutable_joindata()->mutable_outercolumn());
             } break;
+            case WorkItem::OpDataCase::kJoinMatData: {
+                auto* join = witem->mutable_joinmatdata();
+                const auto inner = join->innercolumn();
+                tryReplace(inner.tabname(), inner.colname(), join->mutable_innercolumn());
+                const auto outer = join->outercolumn();
+                tryReplace(outer.tabname(), outer.colname(), join->mutable_outercolumn());
+                if (join->has_innerpositioncolumn()) {
+                    const auto innerPositions = join->innerpositioncolumn();
+                    tryReplace(innerPositions.tabname(), innerPositions.colname(), join->mutable_innerpositioncolumn());
+                }
+                if (join->has_outerpositioncolumn()) {
+                    const auto outerPositions = join->outerpositioncolumn();
+                    tryReplace(outerPositions.tabname(), outerPositions.colname(), join->mutable_outerpositioncolumn());
+                }
+            } break;
             case WorkItem::OpDataCase::kAggData: {
                 const auto& col = witem->aggdata().inputcolumn();
                 tryReplace(col.tabname(), col.colname(), witem->mutable_aggdata()->mutable_inputcolumn());

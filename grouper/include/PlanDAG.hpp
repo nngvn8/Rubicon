@@ -136,6 +136,21 @@ inline std::vector<const ColumnMessage*> getInputColumns(const WorkItem& item) {
             }
             break;
 
+        case WorkItem::kJoinMatData:
+            if (item.joinmatdata().has_innercolumn()) {
+                inputs.push_back(&item.joinmatdata().innercolumn());
+            }
+            if (item.joinmatdata().has_outercolumn()) {
+                inputs.push_back(&item.joinmatdata().outercolumn());
+            }
+            if (item.joinmatdata().has_innerpositioncolumn()) {
+                inputs.push_back(&item.joinmatdata().innerpositioncolumn());
+            }
+            if (item.joinmatdata().has_outerpositioncolumn()) {
+                inputs.push_back(&item.joinmatdata().outerpositioncolumn());
+            }
+            break;
+
         case WorkItem::kAggData:
             if (item.aggdata().has_inputcolumn()) {
                 inputs.push_back(&item.aggdata().inputcolumn());
@@ -229,6 +244,15 @@ inline std::vector<const ColumnMessage*> getOutputColumns(const WorkItem& item) 
             }
             break;
 
+        case WorkItem::kJoinMatData:
+            if (item.joinmatdata().has_ioutputcolumn()) {
+                outputs.push_back(&item.joinmatdata().ioutputcolumn());
+            }
+            if (item.joinmatdata().has_ooutputcolumn()) {
+                outputs.push_back(&item.joinmatdata().ooutputcolumn());
+            }
+            break;
+
         case WorkItem::kAggData:
             if (item.aggdata().has_outputcolumn()) {
                 outputs.push_back(&item.aggdata().outputcolumn());
@@ -290,6 +314,8 @@ inline std::string getOperatorName(const WorkItem& item) {
             return "NLJ";
         case OP_HASHJOIN:
             return "HASHJOIN";
+        case OP_HASHJOIN_MAT:
+            return "HASHJOIN_MAT";
         case OP_MERGEJOIN:
             return "MERGEJOIN";
         case OP_AGGREGATE:
@@ -836,6 +862,11 @@ class PlanDAG {
                 case WorkItem::kJoinData:
                     if (item->joindata().has_joinpredicate()) {
                         os << " | " << compTypeToString(item->joindata().joinpredicate());
+                    }
+                    break;
+                case WorkItem::kJoinMatData:
+                    if (item->joinmatdata().has_joinpredicate()) {
+                        os << " | " << compTypeToString(item->joinmatdata().joinpredicate());
                     }
                     break;
                 case WorkItem::kAggData:

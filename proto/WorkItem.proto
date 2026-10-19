@@ -34,6 +34,7 @@ enum OperatorType {
   OP_MATERIALIZE = 10; // Takes  bitmask/position list and a column --> produces a column whose entries match the positions
   OP_GROUPBY = 11;
   OP_RESULT = 12;
+  OP_HASHJOIN_MAT = 13;
 }
 
 enum AggFunc {
@@ -117,6 +118,16 @@ message JoinItem {
   optional ColumnMessage outerColumn = 2;
   optional ColumnMessage iOutputColumn = 3;
   optional ColumnMessage oOutputColumn = 4;
+  optional CompType joinPredicate = 9;
+}
+
+message JoinMatItem {
+  optional ColumnMessage innerColumn = 1;
+  optional ColumnMessage outerColumn = 2;
+  optional ColumnMessage iOutputColumn = 3;
+  optional ColumnMessage oOutputColumn = 4;
+  optional ColumnMessage innerPositionColumn = 5;
+  optional ColumnMessage outerPositionColumn = 6;
   optional CompType joinPredicate = 9;
 }
 
@@ -204,6 +215,7 @@ message WorkItem {
     MultiGroupItem multiGroupData = 15;
     ResultItem resultData = 16;
     DataTransferItem transferData = 17;
+    JoinMatItem joinMatData = 20;
   }
   repeated uint32 dependsOn = 18;
   optional bool returnExtendedResult = 19;

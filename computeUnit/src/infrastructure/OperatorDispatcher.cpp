@@ -29,6 +29,7 @@ OperatorDispatcher::OperatorDispatcher(WorkerPool* pool, const SupportedOperator
     test_and_add<ResultFactory>(flags, SupportedOperators::SupportedClass::FetchOperations, computeIdFromEnum(WorkRequest::RequestItemCase::kWorkItem, WorkItem::OpDataCase::kResultData));
     test_and_add<AggregateFactory>(flags, SupportedOperators::SupportedClass::AggregateOperations, computeIdFromEnum(WorkRequest::RequestItemCase::kWorkItem, WorkItem::OpDataCase::kAggData));
     test_and_add<JoinFactory>(flags, SupportedOperators::SupportedClass::JoinOperations, computeIdFromEnum(WorkRequest::RequestItemCase::kWorkItem, WorkItem::OpDataCase::kJoinData));
+    test_and_add<JoinFactory>(flags, SupportedOperators::SupportedClass::JoinOperations, computeIdFromEnum(WorkRequest::RequestItemCase::kWorkItem, WorkItem::OpDataCase::kJoinMatData));
     test_and_add<SortFactory>(flags, SupportedOperators::SupportedClass::SortOperations, computeIdFromEnum(WorkRequest::RequestItemCase::kWorkItem, WorkItem::OpDataCase::kSortData));
     test_and_add<MapFactory>(flags, SupportedOperators::SupportedClass::MapOperations, computeIdFromEnum(WorkRequest::RequestItemCase::kWorkItem, WorkItem::OpDataCase::kMapData));
     test_and_add<DataTransferFactory>(flags, SupportedOperators::SupportedClass::DataTransfer, computeIdFromEnum(WorkRequest::RequestItemCase::kWorkItem, WorkItem::OpDataCase::kTransferData));

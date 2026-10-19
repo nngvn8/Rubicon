@@ -1,6 +1,7 @@
 #include <factories/JoinFactory.hpp>
 
 #include <operators/HashJoinOperator.hpp>
+#include <operators/HashJoinOperatorMat.hpp>
 #include <operators/MergeJoinOperator.hpp>
 #include <operators/NestedLoopJoinOperator.hpp>
 
@@ -22,6 +23,9 @@ AbstractOperator* JoinFactory::create_operator(WorkItem& witem) {
         }break;
         case OperatorType::OP_HASHJOIN: {
             op = new HashJoinOperator(witem);
+        }break;
+        case OperatorType::OP_HASHJOIN_MAT: {
+            op = new HashJoinOperatorMat(witem);
         }break;
         default: {
             LOG_ERROR("[JoinFactory] Error. Requesting unknown Operator type: " << OperatorType_Name(witem.operatorid()) << std::endl;)
