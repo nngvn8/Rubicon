@@ -73,8 +73,6 @@ inline const std::vector<std::string>& getKnownPostfixes() {
         "_i",        // inner (join)
         "_o",        // outer (join)
         "_idx",      // index
-        "_idx_ext",  // extended index
-        "_agg",      // aggregation result
         "_sorted",   // sort output
         "_pos",      // position list
         "_mask",     // bitmask
@@ -98,8 +96,7 @@ inline std::string stripPostfix(const std::string& colName) {
         if (result.size() > postfix.size() &&
             result.compare(result.size() - postfix.size(), postfix.size(), postfix) == 0) {
             result = result.substr(0, result.size() - postfix.size());
-            // Don't break - allow stripping multiple postfixes if needed
-            // (e.g., "_idx_ext" should be stripped as whole, but also handle "_idx" + "_ext")
+            // Don't break - allow stripping multiple postfixes if needed.
         }
     }
 
@@ -531,7 +528,7 @@ class PlanDAG {
 
     // Validate input/output column matching
     // - Only checks intermediate columns (isBase = false)
-    // - Compares base names (strips postfixes like _i, _o, _agg, etc.)
+    // - Compares base names (strips postfixes like _i, _o, _idx, etc.)
     ValidationResult validateColumnMatching() const {
         ValidationResult result;
 

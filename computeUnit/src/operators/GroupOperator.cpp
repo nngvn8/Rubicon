@@ -108,10 +108,6 @@ WorkResponse GroupOperator::run() {
         index_offset_accessor += *it;
     }
 
-    /* Store the sorted index inside the DataCatalog (Backward Compatiblity) */
-    LOG_DEBUG1("[GroupOperator] Trying to add the group extends index (Backward Compatiblity): " << m_work_item.multigroupdata().outputindex().tabname() << "." << m_work_item.multigroupdata().outputindex().colname() + "_ext" << std::endl;)
-    addResultToCatalog(group_extends_ptr, cluster_entries * sizeof(idx_t), cluster_entries, DataType::position_list, m_work_item.multigroupdata().outputindex().tabname(), m_work_item.multigroupdata().outputindex().colname() + "_ext");
-    
     /* Store the sorted index inside the DataCatalog (Optimizer Version) */
     LOG_DEBUG1("[GroupOperator] Trying to add the group extends index (Optimizer Version): " << m_work_item.multigroupdata().outputindex().tabname() << "." << m_work_item.multigroupdata().outputindex().colname() << std::endl;)
     addResultToCatalog(group_extends_ptr, cluster_entries * sizeof(idx_t), cluster_entries, DataType::position_list, m_work_item.multigroupdata().outputindex().tabname(), m_work_item.multigroupdata().outputindex().colname());
@@ -131,8 +127,6 @@ WorkResponse GroupOperator::run() {
         memset( aggregation_ptr, 0, cluster_entries * sizeof(uint64_t) );
         auto aggregation_column = DataCatalog::getInstance().getColumnByName(m_work_item.multigroupdata().aggregationcolumn().tabname(), m_work_item.multigroupdata().aggregationcolumn().colname());
         select_agregation_type(aggregation_column, idx_catalog_column, cluster_catalog_column, cluster_aggregation_col, response);
-        LOG_DEBUG1("[GroupOperator] Trying to add the aggregated result (Backward Compatibility): " << m_work_item.multigroupdata().aggregationresultcolumn().tabname() << "." << m_work_item.multigroupdata().aggregationresultcolumn().colname() + "_agg" << std::endl;)
-        addResultToCatalog(cluster_aggregation_col.begin(), cluster_entries * sizeof(uint64_t), cluster_entries, DataType::uint64, m_work_item.multigroupdata().aggregationresultcolumn().tabname(), m_work_item.multigroupdata().aggregationresultcolumn().colname() + "_agg");
         LOG_DEBUG1("[GroupOperator] Trying to add the aggregated result (Optimizer Version): " << m_work_item.multigroupdata().aggregationresultcolumn().tabname() << "." << m_work_item.multigroupdata().aggregationresultcolumn().colname() << std::endl;)
         addResultToCatalog(cluster_aggregation_col.begin(), cluster_entries * sizeof(uint64_t), cluster_entries, DataType::uint64, m_work_item.multigroupdata().aggregationresultcolumn().tabname(), m_work_item.multigroupdata().aggregationresultcolumn().colname());
     }

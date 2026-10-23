@@ -414,13 +414,13 @@ def q_2_1(planId: int = 4, src_uuid: int = 0, target_uuid: int = 0, scale_factor
     
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=30, dependsOn=[11, 16], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_16_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_16_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_11", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_d_year", outputType=WorkItem.TYPE_INTEGER))
     
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=31, dependsOn=[15, 16], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_16_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_16_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_15", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_p_brand", outputType=WorkItem.TYPE_INTEGER))
         
@@ -434,7 +434,7 @@ def q_2_1(planId: int = 4, src_uuid: int = 0, target_uuid: int = 0, scale_factor
     workItems.append(util.create_work_item(itemType="result",
         planId=planId, itemId=19, dependsOn=[16, 18, 30, 31], operatorId=WorkItem.OP_RESULT, extendedResult=extendedResult,
         resultTables=[inter_tab_name,inter_tab_name,inter_tab_name], 
-        resultColumns=[f"{name_prefix}_it_16_agg",f"{name_prefix}_d_year",f"{name_prefix}_it_p_brand"], 
+        resultColumns=[f"{name_prefix}_it_16",f"{name_prefix}_d_year",f"{name_prefix}_it_p_brand"],
         resultHeader=["sum(lo_revenue)","d_year","p_brand"],
         resultIndexTable=inter_tab_name, resultIndexColumn=f"{name_prefix}_final_idx",
         resultName=f"sf{scale_factor}_{name_prefix}_result"))
@@ -567,13 +567,13 @@ def q_2_2(planId: int = 5, src_uuid: int = 0, target_uuid: int = 0, scale_factor
     
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=17, dependsOn=[11, 16], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_16_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_16_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_11", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_17", outputType=WorkItem.TYPE_INTEGER))
     
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=18, dependsOn=[15, 16], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_16_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_16_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_15", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_18", outputType=WorkItem.TYPE_INTEGER))
         
@@ -581,7 +581,7 @@ def q_2_2(planId: int = 5, src_uuid: int = 0, target_uuid: int = 0, scale_factor
     workItems.append(util.create_work_item(itemType="result",
         planId=planId, itemId=19, dependsOn=[16, 17, 18], operatorId=WorkItem.OP_RESULT, extendedResult=extendedResult,
         resultTables=[inter_tab_name,inter_tab_name,inter_tab_name], 
-        resultColumns=[f"{name_prefix}_it_16_agg",f"{name_prefix}_it_17",f"{name_prefix}_it_18"], 
+        resultColumns=[f"{name_prefix}_it_16",f"{name_prefix}_it_17",f"{name_prefix}_it_18"],
         resultHeader=["sum(lo_revenue)","d_year","p_brand"],
         resultName=f"sf{scale_factor}_{name_prefix}_result"))
     
@@ -707,20 +707,20 @@ def q_2_3(planId: int = 6, src_uuid: int = 0, target_uuid: int = 0, scale_factor
 
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=19, dependsOn=[18, 17], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_18_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_18_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_17", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_19", outputType=WorkItem.TYPE_INTEGER))
     
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=20, dependsOn=[18, 15], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_18_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_18_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_15", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_20", outputType=WorkItem.TYPE_INTEGER))
 
     workItems.append(util.create_work_item(itemType="result",
         planId=planId, itemId=21, dependsOn=[18, 19, 20], operatorId=WorkItem.OP_RESULT, extendedResult=extendedResult,
         resultTables=[inter_tab_name,inter_tab_name,inter_tab_name], 
-        resultColumns=[f"{name_prefix}_it_18_agg",f"{name_prefix}_it_20",f"{name_prefix}_it_19"], 
+        resultColumns=[f"{name_prefix}_it_18",f"{name_prefix}_it_20",f"{name_prefix}_it_19"],
         resultHeader=["sum(lo_revenue)","d_year","p_brand"],
         resultName=f"sf{scale_factor}_{name_prefix}_result"))
     
@@ -888,33 +888,33 @@ def q_3_1(planId: int = 7, src_uuid: int = 0, target_uuid: int = 0, scale_factor
 
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=26, dependsOn=[21, 24], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_21", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_26", outputType=WorkItem.TYPE_INTEGER))
     
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=27, dependsOn=[22, 24], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_22", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_27", outputType=WorkItem.TYPE_INTEGER))
     
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=28, dependsOn=[23, 24], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_23", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_28", outputType=WorkItem.TYPE_INTEGER))
     
     workItems.append(util.create_work_item(itemType="sort",
         planId=planId, itemId=29, dependsOn=[26, 24], operatorId=WorkItem.OP_SORT, extendedResult=extendedResult,
         inputTables=[inter_tab_name,inter_tab_name], 
-        inputColumns=[f"{name_prefix}_it_26",f"{name_prefix}_it_24_agg"],
+        inputColumns=[f"{name_prefix}_it_26",f"{name_prefix}_it_24"],
         indexOutputTable=inter_tab_name, indexOutputColumn=f"{name_prefix}_it_29",
         sortOrder=[True,False]))
 
     workItems.append(util.create_work_item(itemType="result",
         planId=planId, itemId=30, dependsOn=[24, 26, 27, 28, 29], operatorId=WorkItem.OP_RESULT, extendedResult=extendedResult,
         resultTables=[inter_tab_name,inter_tab_name,inter_tab_name,inter_tab_name], 
-        resultColumns=[f"{name_prefix}_it_27",f"{name_prefix}_it_28",f"{name_prefix}_it_26",f"{name_prefix}_it_24_agg"], 
+        resultColumns=[f"{name_prefix}_it_27",f"{name_prefix}_it_28",f"{name_prefix}_it_26",f"{name_prefix}_it_24"],
         resultHeader=["c_nation","s_nation","d_year","revenue"],
         resultIndexTable=inter_tab_name, resultIndexColumn=f"{name_prefix}_it_29",
         resultName=f"sf{scale_factor}_{name_prefix}_result"))
@@ -1083,33 +1083,33 @@ def q_3_2(planId: int = 8, src_uuid: int = 0, target_uuid: int = 0, scale_factor
     
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=26, dependsOn=[21, 24], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_21", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_26", outputType=WorkItem.TYPE_INTEGER))
     
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=27, dependsOn=[22, 24], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_22", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_27", outputType=WorkItem.TYPE_INTEGER))
     
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=28, dependsOn=[23, 24], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_23", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_28", outputType=WorkItem.TYPE_INTEGER))
       
     workItems.append(util.create_work_item(itemType="sort",
         planId=planId, itemId=29, dependsOn=[24, 26], operatorId=WorkItem.OP_SORT, extendedResult=extendedResult,
         inputTables=[inter_tab_name,inter_tab_name], 
-        inputColumns=[f"{name_prefix}_it_26",f"{name_prefix}_it_24_agg"],
+        inputColumns=[f"{name_prefix}_it_26",f"{name_prefix}_it_24"],
         indexOutputTable=inter_tab_name, indexOutputColumn=f"{name_prefix}_it_29",
         sortOrder=[True,False]))
 
     workItems.append(util.create_work_item(itemType="result",
         planId=planId, itemId=30, dependsOn=[24, 26, 27, 28, 29], operatorId=WorkItem.OP_RESULT, extendedResult=extendedResult,
         resultTables=[inter_tab_name,inter_tab_name,inter_tab_name,inter_tab_name], 
-        resultColumns=[f"{name_prefix}_it_27",f"{name_prefix}_it_28",f"{name_prefix}_it_26",f"{name_prefix}_it_24_agg"], 
+        resultColumns=[f"{name_prefix}_it_27",f"{name_prefix}_it_28",f"{name_prefix}_it_26",f"{name_prefix}_it_24"],
         resultHeader=["c_city","s_city","d_year","revenue"],
         resultIndexTable=inter_tab_name, resultIndexColumn=f"{name_prefix}_it_29",
         resultName=f"sf{scale_factor}_{name_prefix}_result"))
@@ -1278,33 +1278,33 @@ def q_3_3(planId: int = 9, src_uuid: int = 0, target_uuid: int = 0, scale_factor
     
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=26, dependsOn=[21, 24], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_21", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_26", outputType=WorkItem.TYPE_INTEGER))
     
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=27, dependsOn=[22, 24], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_22", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_27", outputType=WorkItem.TYPE_INTEGER))
     
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=28, dependsOn=[23, 24], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_23", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_28", outputType=WorkItem.TYPE_INTEGER))
       
     workItems.append(util.create_work_item(itemType="sort",
         planId=planId, itemId=29, dependsOn=[24, 26], operatorId=WorkItem.OP_SORT, extendedResult=extendedResult,
         inputTables=[inter_tab_name,inter_tab_name], 
-        inputColumns=[f"{name_prefix}_it_26",f"{name_prefix}_it_24_agg"],
+        inputColumns=[f"{name_prefix}_it_26",f"{name_prefix}_it_24"],
         indexOutputTable=inter_tab_name, indexOutputColumn=f"{name_prefix}_it_29",
         sortOrder=[True,False]))
 
     workItems.append(util.create_work_item(itemType="result",
         planId=planId, itemId=30, dependsOn=[24, 26, 27, 28, 29], operatorId=WorkItem.OP_RESULT, extendedResult=extendedResult,
         resultTables=[inter_tab_name,inter_tab_name,inter_tab_name,inter_tab_name], 
-        resultColumns=[f"{name_prefix}_it_27",f"{name_prefix}_it_28",f"{name_prefix}_it_26",f"{name_prefix}_it_24_agg"], 
+        resultColumns=[f"{name_prefix}_it_27",f"{name_prefix}_it_28",f"{name_prefix}_it_26",f"{name_prefix}_it_24"],
         resultHeader=["c_city","s_city","d_year","revenue"],
         resultIndexTable=inter_tab_name, resultIndexColumn=f"{name_prefix}_it_29",
         resultName=f"sf{scale_factor}_{name_prefix}_result"))
@@ -1473,33 +1473,33 @@ def q_3_4(planId: int = 10, src_uuid: int = 0, target_uuid: int = 0, scale_facto
     
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=26, dependsOn=[21, 24], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_21", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_26", outputType=WorkItem.TYPE_INTEGER))
     
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=27, dependsOn=[22, 24], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_22", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_27", outputType=WorkItem.TYPE_INTEGER))
     
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=28, dependsOn=[23, 24], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_24_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_23", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_28", outputType=WorkItem.TYPE_INTEGER))
       
     workItems.append(util.create_work_item(itemType="sort",
         planId=planId, itemId=29, dependsOn=[24, 26], operatorId=WorkItem.OP_SORT, extendedResult=extendedResult,
         inputTables=[inter_tab_name,inter_tab_name], 
-        inputColumns=[f"{name_prefix}_it_26",f"{name_prefix}_it_24_agg"],
+        inputColumns=[f"{name_prefix}_it_26",f"{name_prefix}_it_24"],
         indexOutputTable=inter_tab_name, indexOutputColumn=f"{name_prefix}_it_29",
         sortOrder=[True,False]))
 
     workItems.append(util.create_work_item(itemType="result",
         planId=planId, itemId=30, dependsOn=[24, 26, 27, 28, 29], operatorId=WorkItem.OP_RESULT, extendedResult=extendedResult,
         resultTables=[inter_tab_name,inter_tab_name,inter_tab_name,inter_tab_name], 
-        resultColumns=[f"{name_prefix}_it_27",f"{name_prefix}_it_28",f"{name_prefix}_it_26",f"{name_prefix}_it_24_agg"], 
+        resultColumns=[f"{name_prefix}_it_27",f"{name_prefix}_it_28",f"{name_prefix}_it_26",f"{name_prefix}_it_24"],
         resultHeader=["c_city","s_city","d_year","revenue"],
         resultIndexTable=inter_tab_name, resultIndexColumn=f"{name_prefix}_it_29",
         resultName=f"sf{scale_factor}_{name_prefix}_result"))
@@ -1664,20 +1664,20 @@ def q_4_1(planId: int = 11, src_uuid: int = 0, target_uuid: int = 0, scale_facto
 
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=34, dependsOn=[33, 30], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_33_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_33_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_30_da_m", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_34", outputType=WorkItem.TYPE_INTEGER))
 
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=35, dependsOn=[33, 280], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_33_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_33_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_280_cu_m", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_35", outputType=WorkItem.TYPE_INTEGER))
 
     workItems.append(util.create_work_item(itemType="result",
         planId=planId, itemId=36, dependsOn=[33, 34, 35], operatorId=WorkItem.OP_RESULT, extendedResult=extendedResult,
         resultTables=[inter_tab_name,inter_tab_name,inter_tab_name], 
-        resultColumns=[f"{name_prefix}_it_34",f"{name_prefix}_it_35",f"{name_prefix}_it_33_agg",], 
+        resultColumns=[f"{name_prefix}_it_34",f"{name_prefix}_it_35",f"{name_prefix}_it_33",],
         resultHeader=["d_year","c_nation","profit"],
         resultName=f"sf{scale_factor}_{name_prefix}_result"))
     
@@ -1923,26 +1923,26 @@ def q_4_2(planId: int = 12, src_uuid: int = 0, target_uuid: int = 0, scale_facto
     
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=42, dependsOn=[41, 36], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_41_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_41_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_36", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_42", outputType=WorkItem.TYPE_INTEGER))
             
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=43, dependsOn=[41, 39], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_41_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_41_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_39", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_43", outputType=WorkItem.TYPE_INTEGER))
             
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=44, dependsOn=[35, 41], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_41_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_41_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_35", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_44", outputType=WorkItem.TYPE_INTEGER))
     
     workItems.append(util.create_work_item(itemType="result",
         planId=planId, itemId=45, dependsOn=[41, 42, 43, 44], operatorId=WorkItem.OP_RESULT, extendedResult=extendedResult,
         resultTables=[inter_tab_name,inter_tab_name,inter_tab_name,inter_tab_name], 
-        resultColumns=[f"{name_prefix}_it_42",f"{name_prefix}_it_43",f"{name_prefix}_it_44",f"{name_prefix}_it_41_agg"], 
+        resultColumns=[f"{name_prefix}_it_42",f"{name_prefix}_it_43",f"{name_prefix}_it_44",f"{name_prefix}_it_41"],
         resultHeader=["d_year","s_nation","p_category","profit"],
         resultName=f"sf{scale_factor}_{name_prefix}_result"))
     
@@ -2194,26 +2194,26 @@ def q_4_2_v2(planId: int = 12, src_uuid: int = 0, target_uuid: int = 0, scale_fa
     
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=42, dependsOn=[41, 36], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_41_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_41_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_36", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_42", outputType=WorkItem.TYPE_INTEGER))
             
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=43, dependsOn=[41, 39], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_41_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_41_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_39", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_43", outputType=WorkItem.TYPE_INTEGER))
             
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=44, dependsOn=[35, 41], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_41_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_41_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_35", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_44", outputType=WorkItem.TYPE_INTEGER))
     
     workItems.append(util.create_work_item(itemType="result",
         planId=planId, itemId=45, dependsOn=[41, 42, 43, 44], operatorId=WorkItem.OP_RESULT, extendedResult=extendedResult,
         resultTables=[inter_tab_name,inter_tab_name,inter_tab_name,inter_tab_name], 
-        resultColumns=[f"{name_prefix}_it_42",f"{name_prefix}_it_43",f"{name_prefix}_it_44",f"{name_prefix}_it_41_agg"], 
+        resultColumns=[f"{name_prefix}_it_42",f"{name_prefix}_it_43",f"{name_prefix}_it_44",f"{name_prefix}_it_41"],
         resultHeader=["d_year","s_nation","p_category","profit"],
         resultName=f"sf{scale_factor}_{name_prefix}_result"))
     
@@ -2460,26 +2460,26 @@ def q_4_2_vai(planId: int = 12, src_uuid: int = 0, target_uuid: int = 0, scale_f
     # === RESULT MATERIALIZATIONS ===
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=34, dependsOn=[33, 301], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_33_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_33_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_301_da_m", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_34", outputType=WorkItem.TYPE_INTEGER))
 
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=35, dependsOn=[33, 291], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_33_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_33_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_291_su_m", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_35", outputType=WorkItem.TYPE_INTEGER))
 
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=36, dependsOn=[33, 43], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_33_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_33_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_43_pa_m", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_36", outputType=WorkItem.TYPE_INTEGER))
 
     workItems.append(util.create_work_item(itemType="result",
         planId=planId, itemId=37, dependsOn=[33, 34, 35, 36], operatorId=WorkItem.OP_RESULT, extendedResult=extendedResult,
         resultTables=[inter_tab_name, inter_tab_name, inter_tab_name, inter_tab_name],
-        resultColumns=[f"{name_prefix}_it_34", f"{name_prefix}_it_35", f"{name_prefix}_it_36", f"{name_prefix}_it_33_agg"],
+        resultColumns=[f"{name_prefix}_it_34", f"{name_prefix}_it_35", f"{name_prefix}_it_36", f"{name_prefix}_it_33"],
         resultHeader=["d_year", "s_nation", "p_category", "profit"],
         resultName=f"sf{scale_factor}_{name_prefix}_result"))
 
@@ -2713,26 +2713,26 @@ def q_4_3(planId: int = 13, src_uuid: int = 0, target_uuid: int = 0, scale_facto
     
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=42, dependsOn=[41, 36], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_41_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_41_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_36", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_42", outputType=WorkItem.TYPE_INTEGER))
             
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=43, dependsOn=[41, 39], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_41_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_41_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_39", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_43", outputType=WorkItem.TYPE_INTEGER))
             
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=44, dependsOn=[35, 41], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_41_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_41_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_35", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_44", outputType=WorkItem.TYPE_INTEGER))
     
     workItems.append(util.create_work_item(itemType="result",
         planId=planId, itemId=45, dependsOn=[41, 42, 43, 44], operatorId=WorkItem.OP_RESULT, extendedResult=extendedResult,
         resultTables=[inter_tab_name,inter_tab_name,inter_tab_name,inter_tab_name], 
-        resultColumns=[f"{name_prefix}_it_42",f"{name_prefix}_it_43",f"{name_prefix}_it_44",f"{name_prefix}_it_41_agg"], 
+        resultColumns=[f"{name_prefix}_it_42",f"{name_prefix}_it_43",f"{name_prefix}_it_44",f"{name_prefix}_it_41"],
         resultHeader=["d_year","s_city","p_brand","profit"],
         resultName=f"sf{scale_factor}_{name_prefix}_result"))
     
@@ -2959,26 +2959,26 @@ def q_4_3_vai(planId: int = 13, src_uuid: int = 0, target_uuid: int = 0, scale_f
     # === RESULT MATERIALIZATIONS ===
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=34, dependsOn=[33, 301], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_33_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_33_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_301_da_m", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_34", outputType=WorkItem.TYPE_INTEGER))
 
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=35, dependsOn=[33, 291], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_33_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_33_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_291_su_m", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_35", outputType=WorkItem.TYPE_INTEGER))
 
     workItems.append(util.create_work_item(itemType="materialize",
         planId=planId, itemId=36, dependsOn=[33, 43], operatorId=WorkItem.OP_MATERIALIZE, extendedResult=extendedResult,
-        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_33_idx_ext", indexType=WorkItem.TYPE_POSLIST,
+        indexTable=inter_tab_name, indexColumn=f"{name_prefix}_it_33_idx", indexType=WorkItem.TYPE_POSLIST,
         filterTable=inter_tab_name, filterColumn=f"{name_prefix}_it_43_pa_m", filterType=WorkItem.TYPE_INTEGER,
         outputTable=inter_tab_name, outputColumn=f"{name_prefix}_it_36", outputType=WorkItem.TYPE_INTEGER))
 
     workItems.append(util.create_work_item(itemType="result",
         planId=planId, itemId=37, dependsOn=[33, 34, 35, 36], operatorId=WorkItem.OP_RESULT, extendedResult=extendedResult,
         resultTables=[inter_tab_name, inter_tab_name, inter_tab_name, inter_tab_name],
-        resultColumns=[f"{name_prefix}_it_34", f"{name_prefix}_it_35", f"{name_prefix}_it_36", f"{name_prefix}_it_33_agg"],
+        resultColumns=[f"{name_prefix}_it_34", f"{name_prefix}_it_35", f"{name_prefix}_it_36", f"{name_prefix}_it_33"],
         resultHeader=["d_year", "s_city", "p_brand", "profit"],
         resultName=f"sf{scale_factor}_{name_prefix}_result"))
 
