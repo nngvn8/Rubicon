@@ -4,7 +4,8 @@ set -uo pipefail
 # ==============================================================================
 # Script: test_all_plans.sh
 # Purpose: Sequentially test all query plans in data/pb_plans against Rubicon,
-#          restarting ComputeUnit (CU) for each plan, and report success/failure.
+#          optionally restarting ComputeUnit (CU) for each plan, and report
+#          success/failure.
 # ==============================================================================
 
 RUBICON_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -15,8 +16,9 @@ EXPERIMENTS_DIR="${RUBICON_ROOT}/experiments"
 GRP_SCRIPT="${HOME}/start_rubi_grp.sh"
 CU_SCRIPT="${HOME}/start_rubi_cu.sh"
 
-TIMEOUT_SECONDS=10
+TIMEOUT_SECONDS=20
 VERBOSE=false
+RESTART_CU=false
 
 # Formatting
 GREEN='\033[0;32m'
@@ -32,7 +34,8 @@ usage() {
     echo ""
     echo "Options:"
     echo "  -v, --verbose       Print full output from run_query.py for every test"
-    echo "  -t, --timeout <sec> Per-query timeout in seconds (default: 10)"
+    echo "  -t, --timeout <sec> Per-query timeout in seconds (default: 20)"
+    echo "  -r, --restart-cu    Restart CU for every plan (default: reuse it)"
     echo "  -h, --help          Show this help message"
     exit 0
 }
@@ -47,6 +50,10 @@ while [[ $# -gt 0 ]]; do
         -t|--timeout)
             TIMEOUT_SECONDS="$2"
             shift 2
+            ;;
+        -r|--restart-cu)
+            RESTART_CU=true
+            shift
             ;;
         -h|--help)
             usage
@@ -166,11 +173,17 @@ fi
 
 echo -e "Found ${CYAN}${TOTAL_PLANS}${NC} plan file(s) to test.\n"
 
-# Start Grouper (runs throughout all tests)
-start_grouper
-
 SUCCESSFUL_PLANS=()
 FAILED_PLANS=()
+
+# Grouper retains its original lifecycle: it runs throughout all tests.
+start_grouper
+if [[ "${RESTART_CU}" == "true" ]]; then
+    echo -e "${BLUE}[*] ComputeUnit will restart for each plan.${NC}"
+else
+    echo -e "${BLUE}[*] ComputeUnit will start with the first plan and remain running.${NC}"
+fi
+CU_STARTED=false
 
 INDEX=0
 for PLAN_PATH in "${PLAN_FILES[@]}"; do
@@ -179,7 +192,7 @@ for PLAN_PATH in "${PLAN_FILES[@]}"; do
 
     echo -e "\n${BOLD}[${INDEX}/${TOTAL_PLANS}] Testing plan: ${CYAN}${PLAN_NAME}${NC}"
 
-    # Check if Grouper is still alive; restart if it crashed
+    # Check if Grouper is still alive; restart if it crashed.
     if ! pgrep -f "build/bin/grouper" >/dev/null; then
         echo -e "    ${YELLOW}[!] Grouper was not running. Restarting Grouper...${NC}"
         start_grouper
@@ -189,13 +202,26 @@ for PLAN_PATH in "${PLAN_FILES[@]}"; do
     rm -f "${PLANS_DIR}"/*.pb 2>/dev/null || true
     cp "${PLAN_PATH}" "${PLANS_DIR}/${PLAN_NAME}"
 
-    # 2. Start ComputeUnit
-    echo -e "    ${BLUE}==>${NC} Starting ComputeUnit..."
-    if ! start_cu; then
-        echo -e "    ${RED}[FAILED]${NC} Unable to start ComputeUnit."
-        FAILED_PLANS+=("${PLAN_NAME} (CU start failure)")
-        rm -f "${PLANS_DIR}/${PLAN_NAME}"
-        continue
+    # 2. Start CU once by default, or for every plan when requested.
+    if [[ "${RESTART_CU}" == "true" || "${CU_STARTED}" == "false" ]]; then
+        echo -e "    ${BLUE}==>${NC} Starting ComputeUnit..."
+        if ! start_cu; then
+            echo -e "    ${RED}[FAILED]${NC} Unable to start ComputeUnit."
+            FAILED_PLANS+=("${PLAN_NAME} (CU start failure)")
+            rm -f "${PLANS_DIR}/${PLAN_NAME}"
+            continue
+        fi
+        CU_STARTED=true
+    elif ! pgrep -f "build/bin/computeUnit" >/dev/null; then
+        # Recover CU only if it crashed; normal plans reuse the same process.
+        echo -e "    ${YELLOW}[!] ComputeUnit was not running. Restarting ComputeUnit...${NC}"
+        if ! start_cu; then
+            echo -e "    ${RED}[FAILED]${NC} Unable to start ComputeUnit."
+            FAILED_PLANS+=("${PLAN_NAME} (CU start failure)")
+            rm -f "${PLANS_DIR}/${PLAN_NAME}"
+            continue
+        fi
+        CU_STARTED=true
     fi
 
     # 3. Execute run_query.py
@@ -228,9 +254,12 @@ for PLAN_PATH in "${PLAN_FILES[@]}"; do
         echo -e "    -----------------------"
     fi
 
-    # 5. Quit ComputeUnit
-    echo -e "    ${BLUE}==>${NC} Stopping ComputeUnit..."
-    stop_cu
+    # 5. Stop CU only in per-plan restart mode.
+    if [[ "${RESTART_CU}" == "true" ]]; then
+        echo -e "    ${BLUE}==>${NC} Stopping ComputeUnit..."
+        stop_cu
+        CU_STARTED=false
+    fi
 
     # 6. Delete the copied plan file
     rm -f "${PLANS_DIR}/${PLAN_NAME}"

@@ -133,9 +133,11 @@ This clones the [ssb-kit](https://github.com/gregrahn/ssb-kit) generator, builds
 ### 3. Build the C++ Components
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release 
 cmake --build build -j$(nproc)
 ```
+
+For clangd support add `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` to the first command.
 
 This builds three executables in `build/bin/`:
 
