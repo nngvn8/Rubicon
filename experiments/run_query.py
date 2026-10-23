@@ -148,8 +148,10 @@ def load_query_plan_from_pb(pb_file_path: str, src_uuid: int = 0, target_uuid: i
     with open(pb_file_path, "rb") as f:
         qplan.ParseFromString(f.read())
 
+    qplan.planid = new_uint32_id()
     for item in qplan.planitems:
         item.returnExtendedResult = extended_results
+        item.planId = qplan.planid
 
     # 2. Wrap it in a WorkRequest
     request = WorkRequest.WorkRequest()
@@ -178,7 +180,7 @@ def run_one_query(client: tcp_client.TCPClient, query_msg: msg.TCPMessage) -> Op
     t_e = datetime.now()
     total_response_time = (t_e - t_s).total_seconds()
 
-    return plan_response
+    return plan_response, total_response_time
 
 
 def enrich_query_plan(query_plan: QueryPlan.QueryPlan, plan_response: WorkResponse.PlanResponse) -> Dict:
@@ -255,6 +257,7 @@ def main():
 
     # Run queries
     all_succeeded = True
+    EXTENDED_RESULT = True
     try:
         for query in query_list:
             target_out_dir = out_dir_base / (Path(query).name if args.f else query)
@@ -267,14 +270,32 @@ def main():
             
             # Generate TCP message
             if args.f:
-                query_tcp_msg, query_plan = load_query_plan_from_pb(query, src_uuid=src_uuid, target_uuid=tgt_uuid, extended_results=True)
+                query_tcp_msg, query_plan = load_query_plan_from_pb(query, src_uuid=src_uuid, target_uuid=tgt_uuid, extended_results=EXTENDED_RESULT)
             else: 
                 pid = new_uint32_id()
                 q = queries_dict[query]
-                query_tcp_msg, query_plan = q(planId=pid, src_uuid=src_uuid, target_uuid=tgt_uuid, scale_factor=scale_factor, extendedResult=True)
+                query_tcp_msg, query_plan = q(planId=pid, src_uuid=src_uuid, target_uuid=tgt_uuid, scale_factor=scale_factor, extendedResult=EXTENDED_RESULT)
             
             # Run query
-            plan_response = run_one_query(client=client, query_msg=query_tcp_msg)
+            plan_response, total_response_time = run_one_query(client=client, query_msg=query_tcp_msg)
+            print(f"Total response time: {total_response_time:.6f} seconds")
+
+            enriched_plan = enrich_query_plan(query_plan, plan_response)
+
+            if plan_response is not None:
+                extended = plan_response.extendedResults
+                if extended:
+                    plan_duration_s = (
+                        max(item.end for item in extended)
+                        - min(item.start for item in extended)
+                    ) / 1_000_000_000
+                    print(f"Plan duration: {plan_duration_s:.6f} seconds")
+                    operator_work_s = sum(
+                        item.end - item.start
+                        for item in plan_response.extendedResults
+                    ) / 1_000_000_000
+                    print(f"Operator work: {operator_work_s:.6f} seconds")
+
 
             if plan_response is None or plan_response.info != PLAN_SUCCESS_INFO:
                 all_succeeded = False
