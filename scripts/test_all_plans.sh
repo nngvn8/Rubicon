@@ -19,6 +19,7 @@ CU_SCRIPT="${HOME}/start_rubi_cu.sh"
 TIMEOUT_SECONDS=20
 VERBOSE=false
 RESTART_CU=false
+WRITE_BENCHMARK_RESULTS=false
 
 # Formatting
 GREEN='\033[0;32m'
@@ -36,6 +37,7 @@ usage() {
     echo "  -v, --verbose       Print full output from run_query.py for every test"
     echo "  -t, --timeout <sec> Per-query timeout in seconds (default: 20)"
     echo "  -r, --restart-cu    Restart CU for every plan (default: reuse it)"
+    echo "  -b, --benchmark     Write execution times to benchmarking/execution_times.json"
     echo "  -h, --help          Show this help message"
     exit 0
 }
@@ -53,6 +55,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -r|--restart-cu)
             RESTART_CU=true
+            shift
+            ;;
+        -b|--benchmark)
+            WRITE_BENCHMARK_RESULTS=true
             shift
             ;;
         -h|--help)
@@ -160,6 +166,7 @@ fi
 stop_cu
 stop_grouper
 mkdir -p "${PLANS_DIR}"
+mkdir -p "${RUBICON_ROOT}/benchmarking"
 rm -f "${PLANS_DIR}"/*.pb 2>/dev/null || true
 
 # Gather plan files in natural sort order
@@ -228,7 +235,11 @@ for PLAN_PATH in "${PLAN_FILES[@]}"; do
     echo -e "    ${BLUE}==>${NC} Running query (timeout: ${TIMEOUT_SECONDS}s)..."
     CMD_OUTPUT=""
     EXIT_CODE=0
-    CMD_OUTPUT=$(cd "${EXPERIMENTS_DIR}" && timeout "${TIMEOUT_SECONDS}" uv run run_query.py -f "${PLANS_DIR}" 2>&1) || EXIT_CODE=$?
+    RUN_QUERY_ARGS=(-f "${PLANS_DIR}")
+    if [[ "${WRITE_BENCHMARK_RESULTS}" == "true" ]]; then
+        RUN_QUERY_ARGS+=(--write-benchmark-results)
+    fi
+    CMD_OUTPUT=$(cd "${EXPERIMENTS_DIR}" && timeout "${TIMEOUT_SECONDS}" uv run run_query.py "${RUN_QUERY_ARGS[@]}" 2>&1) || EXIT_CODE=$?
 
     # 4. Check the canonical PlanResponse.info success marker and exit code.
     # ComputeUnit emits this exact line only for a fully completed plan.

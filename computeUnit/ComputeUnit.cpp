@@ -89,6 +89,7 @@ int main(int argc, char** argv) {
     std::unordered_map<uint32_t, uint64_t> planToGroupMapping;
     std::unordered_map<uint64_t, std::unordered_set<std::string>> groupToTableMapping;
     std::unordered_map<uint32_t, std::vector<ExtendedResult>> planToExtendedResults;
+    std::mutex planToExtendedResultsMutex;
 
     tuddbs::TCPClient client(ip, port);
 
@@ -100,7 +101,7 @@ int main(int argc, char** argv) {
     // Create orchestrator
     orchestrator::PlanOrchestrator orch(config);
 
-    auto onFinish = [&client, &orch, &groupToPlanMutex, &groupToPlanMapping, &planToGroupMapping, &groupToTableMapping, &planToExtendedResults](const Task& task) -> void {
+    auto onFinish = [&client, &orch, &groupToPlanMutex, &groupToPlanMapping, &planToGroupMapping, &groupToTableMapping, &planToExtendedResults, &planToExtendedResultsMutex](const Task& task) -> void {
         auto sendPlanResponse = [&client, &task](PlanResponse response) -> void {
             tuddbs::TCPMetaInfo info;
             info.package_type = TcpPackageType::PLAN_RESPONSE;
@@ -125,12 +126,14 @@ int main(int argc, char** argv) {
 
         if (task.response.success()) {
             LOG_DEBUG1("Task completed successfully." << std::endl;)
-            orch.onItemCompleted(task.original_work_item.planid(), task.original_work_item.itemid());
 
             if (task.response.has_extendedresult()) {
                 const auto& ext = task.response.extendedresult();
-                planToExtendedResults[task.original_work_item.planid()].emplace_back(std::move(ext));
+                std::lock_guard<std::mutex> lock(planToExtendedResultsMutex);
+                planToExtendedResults[task.original_work_item.planid()].emplace_back(ext);
             }
+
+            orch.onItemCompleted(task.original_work_item.planid(), task.original_work_item.itemid());
 
             if (task.original_work_item.operatorid() == OperatorType::OP_RESULT) {
                 LOG_DEBUG1("Plan " << task.original_work_item.planid() << " completed!" << std::endl;)
@@ -142,11 +145,14 @@ int main(int argc, char** argv) {
                 response.set_success(true);
                 response.set_info("Plan completed successfully.");
 
-                if (planToExtendedResults.contains(task.original_work_item.planid())) {
-                    auto* extended_results = response.mutable_extendedresults();
-                    extended_results->Reserve(planToExtendedResults[task.original_work_item.planid()].size());
-                    for (const auto& ext : planToExtendedResults[task.original_work_item.planid()]) {
-                        *extended_results->Add() = std::move(ext);
+                {
+                    std::lock_guard<std::mutex> lock(planToExtendedResultsMutex);
+                    if (planToExtendedResults.contains(task.original_work_item.planid())) {
+                        auto* extended_results = response.mutable_extendedresults();
+                        extended_results->Reserve(planToExtendedResults[task.original_work_item.planid()].size());
+                        for (const auto& ext : planToExtendedResults[task.original_work_item.planid()]) {
+                            *extended_results->Add() = ext;
+                        }
                     }
                 }
 

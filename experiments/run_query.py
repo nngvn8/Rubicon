@@ -17,6 +17,7 @@ from utils.unique_id import new_uint32_id
 from proto import NetworkRequests_pb2 as NetworkRequests
 from proto import WorkRequest_pb2 as WorkRequest
 from proto import WorkResponse_pb2 as WorkResponse
+from proto import WorkItem_pb2 as WorkItem
 
 from proto import ConfigurationRequests_pb2 as ConfigurationRequests
 from proto import QueryPlan_pb2 as QueryPlan
@@ -26,6 +27,10 @@ from proto.UnitDefinition_pb2 import TcpPackageType, UnitType
 from utils.queries import q_1_1, q_1_2, q_1_3, q_2_1, q_2_2, q_2_3, q_3_1, q_3_2, q_3_3, q_3_4, q_4_1, q_4_2, q_4_3
 
 queries_dict = {"q_1_1": q_1_1, "q_1_2": q_1_2, "q_1_3": q_1_3, "q_2_1": q_2_1, "q_2_2": q_2_2, "q_2_3": q_2_3, "q_3_1": q_3_1, "q_3_2": q_3_2, "q_3_3": q_3_3, "q_3_4": q_3_4, "q_4_1": q_4_1, "q_4_2": q_4_2, "q_4_3": q_4_3}
+
+# Set this to True to collect timings without passing --write-benchmark-results.
+WRITE_BENCHMARK_RESULTS = True
+BENCHMARK_FILE = Path(__file__).resolve().parent.parent / "benchmarking" / "execution_times.json"
 
 # Threading (or maybe also not) - not sure if needed
 name_list: List[str] = []
@@ -142,13 +147,14 @@ def set_workers_for_compute_units(client: tcp_client.TCPClient, workers: int):
         client.send_message(work)
 
 
-def load_query_plan_from_pb(pb_file_path: str, src_uuid: int = 0, target_uuid: int = 0, extended_results: bool = False) -> msg.TCPMessage:
+def load_query_plan_from_pb(pb_file_path: str, src_uuid: int = 0, target_uuid: int = 0, extended_results: bool = False, random_pid: bool = False) -> msg.TCPMessage:
     # 1. Load the raw QueryPlan protobuf from disk
     qplan = QueryPlan.QueryPlan()
     with open(pb_file_path, "rb") as f:
         qplan.ParseFromString(f.read())
 
-    qplan.planid = new_uint32_id()
+    if random_pid:
+        qplan.planid = new_uint32_id()
     for item in qplan.planitems:
         item.returnExtendedResult = extended_results
         item.planId = qplan.planid
@@ -207,6 +213,27 @@ def enrich_query_plan(query_plan: QueryPlan.QueryPlan, plan_response: WorkRespon
 
     return enriched_plan
 
+
+def write_benchmark_results(results: Dict[str, Dict]) -> None:
+    """Merge timing results into the shared benchmark file, keyed by plan filename."""
+    BENCHMARK_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    existing_results: Dict[str, Dict] = {}
+    if BENCHMARK_FILE.exists():
+        try:
+            with BENCHMARK_FILE.open("r", encoding="utf-8") as benchmark_file:
+                existing_results = json.load(benchmark_file)
+            if not isinstance(existing_results, dict):
+                raise ValueError("benchmark file does not contain a JSON object")
+        except (json.JSONDecodeError, OSError, ValueError) as error:
+            print(f"[Warn] Could not read {BENCHMARK_FILE}: {error}; replacing it.")
+            existing_results = {}
+
+    existing_results.update(results)
+    with BENCHMARK_FILE.open("w", encoding="utf-8") as benchmark_file:
+        json.dump(existing_results, benchmark_file, indent=2, sort_keys=True)
+        benchmark_file.write("\n")
+
 # ----------------------------
 # Main
 # ----------------------------
@@ -223,6 +250,11 @@ def main():
     parser.add_argument('-q', help='Which quer[ies] to run. If multiple queries are given, write as CSV.', default=False, required=False)
     parser.add_argument('-f', help='Folder to read queries from.', default='/home/mschmidt/rubi-test-2/Rubicon/data/plans')
     parser.add_argument("--out", default="results/run_query")    # Output
+    parser.add_argument(
+        "--write-benchmark-results",
+        action="store_true",
+        help="Write plan timing results to benchmarking/execution_times.json.",
+    )
 
 
 
@@ -254,15 +286,21 @@ def main():
     workers_per_cu = args.workers_per_cu
     scale_factor = args.scale_factor
     out_dir_base = Path(args.out)
+    write_benchmark_results_enabled = WRITE_BENCHMARK_RESULTS or args.write_benchmark_results
+    benchmark_results: Dict[str, Dict] = {}
 
     # Run queries
     all_succeeded = True
     EXTENDED_RESULT = True
+    EXTENDED_RESULT = EXTENDED_RESULT or WRITE_BENCHMARK_RESULTS
+    RANDOM_PID = True
     try:
         for query in query_list:
             target_out_dir = out_dir_base / (Path(query).name if args.f else query)
             target_out_dir.mkdir(parents=True, exist_ok=True)
             
+            print(query)
+
             # Discover CU + set workers
             src_uuid, tgt_uuid = discover_compute_unit(client)
             set_workers_for_compute_units(client, workers_per_cu)
@@ -270,18 +308,25 @@ def main():
             
             # Generate TCP message
             if args.f:
-                query_tcp_msg, query_plan = load_query_plan_from_pb(query, src_uuid=src_uuid, target_uuid=tgt_uuid, extended_results=EXTENDED_RESULT)
+                query_tcp_msg, query_plan = load_query_plan_from_pb(query, src_uuid=src_uuid, target_uuid=tgt_uuid, extended_results=EXTENDED_RESULT, random_pid=RANDOM_PID)
             else: 
-                pid = new_uint32_id()
+                if RANDOM_PID:
+                    pid = new_uint32_id()
                 q = queries_dict[query]
                 query_tcp_msg, query_plan = q(planId=pid, src_uuid=src_uuid, target_uuid=tgt_uuid, scale_factor=scale_factor, extendedResult=EXTENDED_RESULT)
             
+            print(f"PLAN_ID: {query_plan.planid}")
+            if query_plan.planitems[-1].operatorId == WorkItem.OP_RESULT:
+                print(f"RESULT_FILE: {query_plan.planitems[-1].resultData.filename}")
+            else:
+                print("NO RESULT FILE")
+
             # Run query
             plan_response, total_response_time = run_one_query(client=client, query_msg=query_tcp_msg)
-            print(f"Total response time: {total_response_time:.6f} seconds")
+            print(f"Total response time: {total_response_time} seconds")
 
-            enriched_plan = enrich_query_plan(query_plan, plan_response)
-
+            plan_duration_s = None
+            operator_work_s = None
             if plan_response is not None:
                 extended = plan_response.extendedResults
                 if extended:
@@ -289,12 +334,20 @@ def main():
                         max(item.end for item in extended)
                         - min(item.start for item in extended)
                     ) / 1_000_000_000
-                    print(f"Plan duration: {plan_duration_s:.6f} seconds")
+                    print(f"Plan duration: {plan_duration_s} seconds")
                     operator_work_s = sum(
                         item.end - item.start
                         for item in plan_response.extendedResults
                     ) / 1_000_000_000
-                    print(f"Operator work: {operator_work_s:.6f} seconds")
+                    print(f"Operator work: {operator_work_s} seconds")
+
+            if write_benchmark_results_enabled:
+                benchmark_results[Path(query).name] = {
+                    "plan_id": query_plan.planid,
+                    "total_response_time": total_response_time,
+                    "plan_duration": plan_duration_s,
+                    "operator_work": operator_work_s,
+                }
 
 
             if plan_response is None or plan_response.info != PLAN_SUCCESS_INFO:
@@ -307,6 +360,9 @@ def main():
 
     finally:
         client.disconnect()
+
+    if write_benchmark_results_enabled:
+        write_benchmark_results(benchmark_results)
 
     if not all_succeeded:
         sys.exit(1)
