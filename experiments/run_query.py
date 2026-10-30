@@ -1,11 +1,16 @@
 import argparse
 import json
+import platform
+import re
+import statistics
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Tuple, Dict
 from pathlib import Path
+
+import yaml
 
 from google.protobuf.json_format import MessageToDict
 
@@ -30,7 +35,13 @@ queries_dict = {"q_1_1": q_1_1, "q_1_2": q_1_2, "q_1_3": q_1_3, "q_2_1": q_2_1, 
 
 # Set this to True to collect timings without passing --write-benchmark-results.
 WRITE_BENCHMARK_RESULTS = True
-BENCHMARK_FILE = Path(__file__).resolve().parent.parent / "benchmarking" / "execution_times.json"
+BENCHMARK_ROOT = Path(__file__).resolve().parent.parent / "benchmarking"
+REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
+PLAN_SOURCES = {
+    "plans": REPOSITORY_ROOT / "data" / "plans",
+    "pb_plans": REPOSITORY_ROOT / "data" / "pb_plans",
+}
+DEFAULT_BENCHMARK_CONFIG = Path(__file__).resolve().parent / "configs" / "benchmark_example.yaml"
 
 # Threading (or maybe also not) - not sure if needed
 name_list: List[str] = []
@@ -97,7 +108,9 @@ def wait_next_completion(client, plan_id, timeout=300.0):
                 return None
             complete_condition.wait(timeout=remaining)
 
-        return complete_plans.get(plan_id, None)
+        # Plan ids are unique for every execution. Remove the terminal response
+        # once consumed so a long benchmark does not retain every prior result.
+        return complete_plans.pop(plan_id, None)
 
 
 def wait_for_config_reply(client: tcp_client.TCPClient) -> Optional[bool]:
@@ -214,66 +227,209 @@ def enrich_query_plan(query_plan: QueryPlan.QueryPlan, plan_response: WorkRespon
     return enriched_plan
 
 
-def write_benchmark_results(results: Dict[str, Dict]) -> None:
-    """Merge timing results into the shared benchmark file, keyed by plan filename."""
-    BENCHMARK_FILE.parent.mkdir(parents=True, exist_ok=True)
+def summarize(samples: List[Dict]) -> Dict[str, Dict[str, float]]:
+    """Calculate summary statistics for each timing metric with observations."""
+    summary: Dict[str, Dict[str, float]] = {}
+    for metric in ("total_response_time", "plan_duration", "operator_work"):
+        values = [sample[metric] for sample in samples if sample[metric] is not None]
+        if not values:
+            continue
+        summary[metric] = {
+            "count": len(values),
+            "mean": statistics.fmean(values),
+            "median": statistics.median(values),
+            "stdev": statistics.stdev(values) if len(values) > 1 else 0.0,
+            "min": min(values),
+            "max": max(values),
+        }
+    return summary
 
-    existing_results: Dict[str, Dict] = {}
-    if BENCHMARK_FILE.exists():
+
+def natural_sort_key(path: Path) -> List[object]:
+    """Sort q_1_2.pb before q_1_10.pb, independent of filesystem order."""
+    return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", path.name)]
+
+
+def normalize_variant_value(value: object) -> bool | int | float | str:
+    """Keep variant metadata scalar, so it is stable in JSON and path names."""
+    if isinstance(value, (bool, int, float, str)):
+        return value
+    raise ValueError(f"variant values must be scalar, got {type(value).__name__}")
+
+
+def parse_variant_assignments(assignments: List[str]) -> Dict[str, bool | int | float | str]:
+    """Parse repeatable key=value CLI variant overrides."""
+    variants: Dict[str, bool | int | float | str] = {}
+    for assignment in assignments:
+        if "=" not in assignment:
+            raise ValueError(f"invalid variant {assignment!r}; expected key=value")
+        key, raw_value = assignment.split("=", 1)
+        if not key:
+            raise ValueError("variant key must not be empty")
         try:
-            with BENCHMARK_FILE.open("r", encoding="utf-8") as benchmark_file:
-                existing_results = json.load(benchmark_file)
-            if not isinstance(existing_results, dict):
-                raise ValueError("benchmark file does not contain a JSON object")
-        except (json.JSONDecodeError, OSError, ValueError) as error:
-            print(f"[Warn] Could not read {BENCHMARK_FILE}: {error}; replacing it.")
-            existing_results = {}
+            value = yaml.safe_load(raw_value)
+        except yaml.YAMLError as error:
+            raise ValueError(f"invalid variant value for {key!r}: {error}") from error
+        variants[key] = normalize_variant_value(value)
+    return variants
 
-    existing_results.update(results)
-    with BENCHMARK_FILE.open("w", encoding="utf-8") as benchmark_file:
-        json.dump(existing_results, benchmark_file, indent=2, sort_keys=True)
-        benchmark_file.write("\n")
+
+def variant_slug(variant: Dict[str, bool | int | float | str]) -> str:
+    """Create a deterministic filesystem-friendly category for a variant map."""
+    if not variant:
+        return "default"
+
+    def slugify(value: object) -> str:
+        return re.sub(r"[^a-zA-Z0-9._-]+", "-", str(value).lower()).strip("-") or "empty"
+
+    return "__".join(
+        f"{slugify(key)}={slugify(value)}" for key, value in sorted(variant.items())
+    )
+
+
+def load_benchmark_config(config_path: Optional[str]) -> Dict:
+    """Load and minimally validate an optional YAML benchmark configuration."""
+    if config_path is None:
+        return {}
+    path = Path(config_path)
+    try:
+        with path.open("r", encoding="utf-8") as config_file:
+            config = yaml.safe_load(config_file) or {}
+    except (OSError, yaml.YAMLError) as error:
+        raise ValueError(f"could not read config {path}: {error}") from error
+    if not isinstance(config, dict):
+        raise ValueError("benchmark config must contain a YAML mapping")
+    for key in ("benchmark", "variant", "experiment"):
+        if key in config and not isinstance(config[key], dict):
+            raise ValueError(f"config field {key!r} must be a mapping")
+    if "plan_source" in config and config["plan_source"] not in PLAN_SOURCES:
+        raise ValueError(f"config plan_source must be one of: {', '.join(PLAN_SOURCES)}")
+    if "variant" in config:
+        config["variant"] = {
+            str(key): normalize_variant_value(value)
+            for key, value in config["variant"].items()
+        }
+    return config
+
+
+def create_benchmark_file(
+    workers: int, scale_factor: int, runs: int, variant: Dict[str, bool | int | float | str]
+) -> Path:
+    """Create a unique benchmark directory without using randomized plan ids."""
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+    run_name = f"{timestamp}_workers-{workers}_sf-{scale_factor}_runs-{runs}"
+    benchmark_dir = BENCHMARK_ROOT / variant_slug(variant) / run_name
+    suffix = 1
+    while benchmark_dir.exists():
+        benchmark_dir = BENCHMARK_ROOT / variant_slug(variant) / f"{run_name}_{suffix}"
+        suffix += 1
+    benchmark_dir.mkdir(parents=True)
+    return benchmark_dir / "results.json"
+
+
+def write_benchmark_results(benchmark_file: Path, results: Dict) -> None:
+    """Write one self-contained benchmark result file."""
+    with benchmark_file.open("w", encoding="utf-8") as output_file:
+        json.dump(results, output_file, indent=2, sort_keys=True)
+        output_file.write("\n")
 
 # ----------------------------
 # Main
 # ----------------------------
 def main():
+    # Parse --config first so its values become defaults, while later CLI
+    # arguments still take precedence over that configuration.
+    config_parser = argparse.ArgumentParser(add_help=False)
+    config_parser.add_argument(
+        "--config",
+        default=str(DEFAULT_BENCHMARK_CONFIG),
+        help="YAML benchmark configuration file.",
+    )
+    config_args, _ = config_parser.parse_known_args()
+    try:
+        benchmark_config = load_benchmark_config(config_args.config)
+    except ValueError as error:
+        config_parser.error(str(error))
+    benchmark_defaults = benchmark_config.get("benchmark", {})
 
     # Setup Parser
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--config",
+        default=str(DEFAULT_BENCHMARK_CONFIG),
+        help="YAML benchmark configuration file (default: configs/benchmark_example.yaml).",
+    )
     parser.add_argument("-ip", default="127.0.0.1")
-    parser.add_argument("-port", default=23232)
-    parser.add_argument("--scale-factor", default=2)
-    parser.add_argument("--workers-per-cu", type=int, default=48)
+    parser.add_argument("-port", default=23233)
+    parser.add_argument("--scale-factor", type=int, default=benchmark_defaults.get("scale_factor", 2))
+    parser.add_argument("--workers-per-cu", type=int, default=benchmark_defaults.get("workers_per_cu", 48))
     parser.add_argument("-info", default="Sequentially running a set of querries")
     parser.add_argument("-name", default="Sequentially running a set of querries client")
     parser.add_argument('-q', help='Which quer[ies] to run. If multiple queries are given, write as CSV.', default=False, required=False)
-    parser.add_argument('-f', help='Folder to read queries from.', default='/home/mschmidt/rubi-test-2/Rubicon/data/plans')
+    parser.add_argument('-f', help='Folder to read .pb queries from (overrides --plan-source).')
+    parser.add_argument(
+        "--plan-source",
+        choices=PLAN_SOURCES.keys(),
+        default=benchmark_config.get("plan_source", "plans"),
+        help="Named repository plan directory (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--variant",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Override or add experiment variant metadata; repeatable.",
+    )
     parser.add_argument("--out", default="results/run_query")    # Output
+    parser.add_argument(
+        "--runs",
+        type=int,
+        default=benchmark_defaults.get("runs", 1),
+        help="Number of measured full-batch rounds to execute (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--warmup-runs",
+        type=int,
+        default=benchmark_defaults.get("warmup_runs", 0),
+        help="Number of full-batch warmup rounds to execute before measuring (default: %(default)s).",
+    )
     parser.add_argument(
         "--write-benchmark-results",
         action="store_true",
-        help="Write plan timing results to benchmarking/execution_times.json.",
+        help="Write a timestamped benchmark result directory under benchmarking/.",
     )
 
 
 
     args = parser.parse_args()
+    if args.runs < 1:
+        parser.error("--runs must be at least 1")
+    if args.warmup_runs < 0:
+        parser.error("--warmup-runs must not be negative")
+    try:
+        variant = dict(benchmark_config.get("variant", {}))
+        variant.update(parse_variant_assignments(args.variant))
+    except ValueError as error:
+        parser.error(str(error))
 
     # Setup Client
     client = tcp_client.TCPClient(unit_type=UnitType.QUERY_PLANER, unit_info=args.info, name=args.name)
 
-    query_list = []
+    query_list: List[str] = []
+    using_pb_files = not bool(args.q)
     if args.q:
         qs = args.q.split(",")
         query_list.extend([query.strip() for query in qs])
     elif args.f:
         path = Path(args.f)
-        for filename in path.iterdir():
-            if filename.suffix == ".pb":
-                query_list.append(str(filename))
+        if not path.is_dir():
+            parser.error(f"plan folder does not exist: {path}")
+        query_list = [str(path) for path in sorted(path.glob("*.pb"), key=natural_sort_key)]
     else:
-        query_list = queries_dict.keys()
+        path = PLAN_SOURCES[args.plan_source]
+        if not path.is_dir():
+            parser.error(f"named plan source does not exist: {path}")
+        query_list = [str(path) for path in sorted(path.glob("*.pb"), key=natural_sort_key)]
 
     # Register callbacks (copied from concurrent query_execution_experiment.py - not sure if needed)
     client.register_callback(TcpPackageType.UUID_FOR_UNIT_RESPONSE, update_uuids)
@@ -285,84 +441,103 @@ def main():
     # Extract relevant args
     workers_per_cu = args.workers_per_cu
     scale_factor = args.scale_factor
-    out_dir_base = Path(args.out)
     write_benchmark_results_enabled = WRITE_BENCHMARK_RESULTS or args.write_benchmark_results
     benchmark_results: Dict[str, Dict] = {}
+    benchmark_file: Optional[Path] = None
+    if write_benchmark_results_enabled:
+        benchmark_file = create_benchmark_file(workers_per_cu, scale_factor, args.runs, variant)
 
-    # Run queries
+    # Configure the ComputeUnit once. This keeps discovery and configuration
+    # out of every measured execution.
     all_succeeded = True
     EXTENDED_RESULT = True
-    EXTENDED_RESULT = EXTENDED_RESULT or WRITE_BENCHMARK_RESULTS
     RANDOM_PID = True
     try:
+        src_uuid, tgt_uuid = discover_compute_unit(client)
+        set_workers_for_compute_units(client, workers_per_cu)
+        time.sleep(1.0)
+
         for query in query_list:
-            target_out_dir = out_dir_base / (Path(query).name if args.f else query)
-            target_out_dir.mkdir(parents=True, exist_ok=True)
-            
-            print(query)
+            benchmark_results[Path(query).name] = {"samples": [], "failures": []}
 
-            # Discover CU + set workers
-            src_uuid, tgt_uuid = discover_compute_unit(client)
-            set_workers_for_compute_units(client, workers_per_cu)
-            time.sleep(1.0)
-            
-            # Generate TCP message
-            if args.f:
-                query_tcp_msg, query_plan = load_query_plan_from_pb(query, src_uuid=src_uuid, target_uuid=tgt_uuid, extended_results=EXTENDED_RESULT, random_pid=RANDOM_PID)
-            else: 
-                if RANDOM_PID:
-                    pid = new_uint32_id()
-                q = queries_dict[query]
-                query_tcp_msg, query_plan = q(planId=pid, src_uuid=src_uuid, target_uuid=tgt_uuid, scale_factor=scale_factor, extendedResult=EXTENDED_RESULT)
-            
-            print(f"PLAN_ID: {query_plan.planid}")
-            if query_plan.planitems[-1].operatorId == WorkItem.OP_RESULT:
-                print(f"RESULT_FILE: {query_plan.planitems[-1].resultData.filename}")
-            else:
-                print("NO RESULT FILE")
+        total_rounds = args.warmup_runs + args.runs
+        for round_number in range(1, total_rounds + 1):
+            is_warmup = round_number <= args.warmup_runs
+            measured_round = round_number - args.warmup_runs
+            label = "warmup" if is_warmup else f"measured round {measured_round}/{args.runs}"
+            print(f"\n=== {label} ===")
 
-            # Run query
-            plan_response, total_response_time = run_one_query(client=client, query_msg=query_tcp_msg)
-            print(f"Total response time: {total_response_time} seconds")
+            # A round is a complete sequential pass over the selected batch.
+            for query in query_list:
+                print(query)
+                if using_pb_files:
+                    query_tcp_msg, query_plan = load_query_plan_from_pb(
+                        query, src_uuid=src_uuid, target_uuid=tgt_uuid,
+                        extended_results=EXTENDED_RESULT, random_pid=RANDOM_PID,
+                    )
+                else:
+                    q = queries_dict[query]
+                    query_tcp_msg, query_plan = q(
+                        planId=new_uint32_id(), src_uuid=src_uuid, target_uuid=tgt_uuid,
+                        scale_factor=scale_factor, extendedResult=EXTENDED_RESULT,
+                    )
 
-            plan_duration_s = None
-            operator_work_s = None
-            if plan_response is not None:
-                extended = plan_response.extendedResults
-                if extended:
-                    plan_duration_s = (
-                        max(item.end for item in extended)
-                        - min(item.start for item in extended)
-                    ) / 1_000_000_000
+                plan_response, total_response_time = run_one_query(client=client, query_msg=query_tcp_msg)
+                print(f"Total response time: {total_response_time} seconds")
+
+                plan_duration_s = None
+                operator_work_s = None
+                if plan_response is not None and plan_response.extendedResults:
+                    extended = plan_response.extendedResults
+                    plan_duration_s = (max(item.end for item in extended) - min(item.start for item in extended)) / 1_000_000_000
+                    operator_work_s = sum(item.end - item.start for item in extended) / 1_000_000_000
                     print(f"Plan duration: {plan_duration_s} seconds")
-                    operator_work_s = sum(
-                        item.end - item.start
-                        for item in plan_response.extendedResults
-                    ) / 1_000_000_000
                     print(f"Operator work: {operator_work_s} seconds")
 
-            if write_benchmark_results_enabled:
-                benchmark_results[Path(query).name] = {
-                    "plan_id": query_plan.planid,
-                    "total_response_time": total_response_time,
-                    "plan_duration": plan_duration_s,
-                    "operator_work": operator_work_s,
-                }
+                succeeded = plan_response is not None and plan_response.info == PLAN_SUCCESS_INFO
+                if not succeeded:
+                    failure = "no plan response received" if plan_response is None else plan_response.info
+                    print(f"Query {query} FAILED: {failure}")
+                    if not is_warmup:
+                        all_succeeded = False
+                        benchmark_results[Path(query).name]["failures"].append({
+                            "round": measured_round, "error": failure,
+                        })
+                elif not is_warmup:
+                    benchmark_results[Path(query).name]["samples"].append({
+                        "round": measured_round,
+                        "total_response_time": total_response_time,
+                        "plan_duration": plan_duration_s,
+                        "operator_work": operator_work_s,
+                    })
+                    print(plan_response.info)
 
-
-            if plan_response is None or plan_response.info != PLAN_SUCCESS_INFO:
-                all_succeeded = False
-
-            if plan_response is not None:
-                print(plan_response.info)
-            else:
-                print(f"Query {query} FAILED: no plan response received")
+        for result in benchmark_results.values():
+            result["summary"] = summarize(result["samples"])
 
     finally:
         client.disconnect()
 
     if write_benchmark_results_enabled:
-        write_benchmark_results(benchmark_results)
+        assert benchmark_file is not None
+        write_benchmark_results(benchmark_file, {
+            "metadata": {
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "host": platform.node(),
+                "workers_per_cu": workers_per_cu,
+                "scale_factor": scale_factor,
+                "warmup_rounds": args.warmup_runs,
+                "measured_rounds": args.runs,
+                "cu_restarted_between_runs": False,
+                "plan_source": args.f if args.f else args.plan_source,
+                "query_order": [Path(query).name for query in query_list],
+                "variant": variant,
+                "experiment": benchmark_config.get("experiment", {}),
+                "config_file": args.config,
+            },
+            "queries": benchmark_results,
+        })
+        print(f"Benchmark results written to {benchmark_file}")
 
     if not all_succeeded:
         sys.exit(1)

@@ -20,6 +20,8 @@ TIMEOUT_SECONDS=20
 VERBOSE=false
 RESTART_CU=false
 WRITE_BENCHMARK_RESULTS=false
+RUNS=1
+WARMUP_RUNS=0
 
 # Formatting
 GREEN='\033[0;32m'
@@ -37,7 +39,9 @@ usage() {
     echo "  -v, --verbose       Print full output from run_query.py for every test"
     echo "  -t, --timeout <sec> Per-query timeout in seconds (default: 20)"
     echo "  -r, --restart-cu    Restart CU for every plan (default: reuse it)"
-    echo "  -b, --benchmark     Write execution times to benchmarking/execution_times.json"
+    echo "  -b, --benchmark     Write timestamped benchmark results under benchmarking/"
+    echo "      --runs <count>   Measured full-batch rounds per benchmark (default: 1)"
+    echo "      --warmup-runs <count>  Unmeasured full-batch warmup rounds (default: 0)"
     echo "  -h, --help          Show this help message"
     exit 0
 }
@@ -60,6 +64,14 @@ while [[ $# -gt 0 ]]; do
         -b|--benchmark)
             WRITE_BENCHMARK_RESULTS=true
             shift
+            ;;
+        --runs)
+            RUNS="$2"
+            shift 2
+            ;;
+        --warmup-runs)
+            WARMUP_RUNS="$2"
+            shift 2
             ;;
         -h|--help)
             usage
@@ -235,7 +247,7 @@ for PLAN_PATH in "${PLAN_FILES[@]}"; do
     echo -e "    ${BLUE}==>${NC} Running query (timeout: ${TIMEOUT_SECONDS}s)..."
     CMD_OUTPUT=""
     EXIT_CODE=0
-    RUN_QUERY_ARGS=(-f "${PLANS_DIR}")
+    RUN_QUERY_ARGS=(-f "${PLANS_DIR}" --runs "${RUNS}" --warmup-runs "${WARMUP_RUNS}")
     if [[ "${WRITE_BENCHMARK_RESULTS}" == "true" ]]; then
         RUN_QUERY_ARGS+=(--write-benchmark-results)
     fi

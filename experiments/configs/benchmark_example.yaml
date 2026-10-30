@@ -1,0 +1,17 @@
+# Pass this file with: uv run run_query.py --config configs/benchmark_example.yaml
+# Explicit command-line options override these values.
+plan_source: pb_plans
+
+benchmark:
+  runs: 20
+  warmup_runs: 0
+  workers_per_cu: 48
+  scale_factor: 2
+
+# Add future plan transformations here without changing the runner schema.
+variant:
+  materialize_into_join: false
+
+experiment:
+  reason: "Test late-no-gco plans without materialization merged into joins"
+  notes: "Add machine, data, or revision notes here."
