@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Benchmark comparisons</title>
+<style>
+:root{font:15px system-ui,sans-serif;color:#213047;background:#f5f7fa}body{margin:0;padding:32px;max-width:1600px;margin-inline:auto}h1{margin:0 0 8px;font-size:28px}p{color:#546277}button,select,input{font:inherit;border:1px solid #bdc8d6;border-radius:5px;padding:7px 10px;background:white;color:inherit}button{cursor:pointer}button:hover{background:#eaf0fa}input[type=radio]{accent-color:#245ac5}#search{min-width:300px;flex:1}header{display:flex;justify-content:space-between;gap:24px;align-items:start}details.settings{min-width:220px;background:white;border:1px solid #d7dfe9;border-radius:6px;padding:10px}summary{cursor:pointer}label.editor{display:block;padding-top:8px}.toolbar{display:flex;gap:10px;margin:24px 0 12px;flex-wrap:wrap}.filter{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap}.filter select{max-width:450px}.filter select.value{min-width:240px}.table-wrap{overflow-x:auto;background:white;border:1px solid #d7dfe9;border-radius:8px}table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:14px 12px;border-bottom:1px solid #e1e6ee;vertical-align:top}th{background:#edf2f8;white-space:nowrap}td small{display:block;color:#637188;margin-top:5px;max-width:320px;overflow-wrap:anywhere}.settings label{white-space:nowrap}.command{display:flex;margin-top:10px;gap:6px}.command input{font:12px monospace;width:260px;min-width:0;flex:1}.copy-button{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;padding:7px}.copy-button svg{width:18px;height:18px}.settings-list{margin:0;padding-left:18px;min-width:190px}.settings-list li{margin-bottom:5px;overflow-wrap:anywhere}.variant-settings{display:block;font-size:12px;color:#637188;margin-top:5px}.variant-settings .settings-list{min-width:150px}.path{font:12px monospace;overflow-wrap:anywhere}.detail{white-space:pre-wrap;max-height:300px;overflow:auto;background:#f5f7fa;padding:12px;font-size:12px}a{color:#245ac5}#status{min-height:1.4em}#count{margin:16px 0}td.actions{min-width:340px}.badge{font-size:12px;color:#546277}button.primary{background:#245ac5;color:white;border-color:#245ac5}button.primary:hover{background:#19499f}.notice{max-width:450px;color:#77571b;font-size:12px}.muted{color:#718096}footer{margin-top:20px;color:#637188;font-size:13px}
+.group-controls{display:flex;gap:10px;align-items:center;margin:16px 0;flex-wrap:wrap}.group-toggle{display:inline-flex;gap:7px;align-items:center}.disclosure{margin:0 7px 7px 0;padding:3px 7px}.group-size{display:block;color:#637188;font-size:12px;margin-top:5px}.member-row{background:#f7faff}.member-row td:first-child{padding-left:28px}.highlight{animation:highlight-row 3s ease-out}@keyframes highlight-row{from{background:#fff0a8}to{background:transparent}}.rendering-links{position:relative;display:inline-block;margin-top:9px}.rendering-links>summary{list-style:none;border:1px solid #c4cedd;background:#edf2f8;border-radius:12px;padding:3px 8px;font-size:12px}.rendering-links.redundant>summary{background:#fff0cf;border-color:#d9b15d;color:#735211}.related-list{display:none;position:absolute;z-index:10;top:100%;left:0;background:white;border:1px solid #c4cedd;border-radius:6px;box-shadow:0 5px 20px #24375426;padding:12px;min-width:290px;max-width:420px;max-height:300px;overflow:auto}.rendering-links[open] .related-list,.rendering-links:hover .related-list,.rendering-links:focus-within .related-list{display:block}.related-list ul{padding-left:18px;margin:8px 0}.related-list li{margin:9px 0}.related-list small{white-space:normal}.fingerprint-state{font-size:12px;color:#637188;margin-top:8px}
+</style>
+</head>
+<body>
+<header><div><h1>Benchmark comparisons</h1><p>Find a batch by its recorded metadata, then copy a command to open its directory.</p></div>
+<details class="settings"><summary>Editor settings</summary>
+<label class="editor"><input type="radio" name="editor" value="antigravity-ide" checked> Antigravity</label>
+<label class="editor"><input type="radio" name="editor" value="code"> VS Code</label>
+<p class="badge">Commands use <code>-n</code> to open a new window. Paste into your remote IDE terminal.</p>
+</details></header>
+<div class="toolbar"><input id="search" type="search" aria-label="Search batches" placeholder="Search labels, paths, metadata…"><button id="add">Add metadata filter</button><button id="reset">Reset filters</button></div>
+<div id="filters"></div><p class="badge">Filters match both inputs’ settings together. “Not recorded” means the field is absent, not disabled.</p>
+<div class="group-controls"><label class="group-toggle"><input id="group-matching" type="checkbox" checked> Group matching configurations</label><button id="expand-all">Expand all</button><button id="collapse-all">Collapse all</button></div>
+<div id="count" aria-live="polite"></div><div id="status" role="status"></div>
+<div class="table-wrap"><table><thead><tr><th>Generated (UTC)</th><th>Comparison</th><th>Scale factor</th><th>Execution mode</th><th>Optimizations</th><th>Batch directory</th></tr></thead><tbody id="rows"></tbody></table></div>
+<footer>Static snapshot built from manifest.json files. Rebuild with <code>python3 scripts/benchmark_index.py</code>; plotting also rebuilds it automatically. No server or external assets required.</footer>
+<script id="batch-data" type="application/json">__BATCH_DATA__</script>
+<script>
+'use strict';
+const batches=JSON.parse(document.getElementById('batch-data').textContent);
+const roles=['baseline','comparison'];
+const allFields=[...new Set(batches.flatMap(b=>roles.flatMap(r=>Object.keys(b.fields[r]))))].sort();
+const fields=[...new Set(['scale_factor','execution_mode','optimization',...allFields])];
+const $=id=>document.getElementById(id);
+const has=(o,k)=>Object.prototype.hasOwnProperty.call(o,k);
+const fieldValue=(b,r,k)=>has(b.fields[r],k)?{recorded:true,value:b.fields[r][k]}:{recorded:false};
+const display=v=>!v.recorded?'Not recorded':typeof v.value==='string'?v.value:JSON.stringify(v.value);
+const pairKey=(b,k)=>JSON.stringify(roles.map(r=>fieldValue(b,r,k)));
+function pairText(b,k){const [a,c]=roles.map(r=>fieldValue(b,r,k));return JSON.stringify(a)===JSON.stringify(c)?display(a):`Baseline: ${display(a)} → Comparison: ${display(c)}`;}
+function element(tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e;}
+function settingsList(b,key){
+  const a=fieldValue(b,'baseline',key),c=fieldValue(b,'comparison',key);
+  const isObject=v=>v.recorded&&v.value!==null&&typeof v.value==='object'&&!Array.isArray(v.value);
+  if(!isObject(a)||!isObject(c))return element('span',pairText(b,key));
+  const list=element('ul',undefined,'settings-list');
+  const keys=[...new Set([...Object.keys(a.value),...Object.keys(c.value)])].sort();
+  for(const name of keys){
+    const av=has(a.value,name)?{recorded:true,value:a.value[name]}:{recorded:false};
+    const cv=has(c.value,name)?{recorded:true,value:c.value[name]}:{recorded:false};
+    const text=JSON.stringify(av)===JSON.stringify(cv)?display(av):`Baseline: ${display(av)} → Comparison: ${display(cv)}`;
+    list.append(element('li',`${name}: ${text}`));
+  }
+  if(!keys.length)list.append(element('li','No settings recorded'));
+  return list;
+}
+function option(value,text){const e=element('option',text);e.value=value;return e;}
+let editor='antigravity-ide';try{const saved=localStorage.getItem('benchmark-editor');if(['antigravity-ide','code'].includes(saved))editor=saved;}catch{}
+for(const radio of document.querySelectorAll('[name=editor]')){radio.checked=radio.value===editor;radio.addEventListener('change',()=>{editor=radio.value;try{localStorage.setItem('benchmark-editor',editor);}catch{}render();});}
+const shellQuote=path=>"'"+path.replaceAll("'", "'\\''")+"'";
+const command=b=>`${editor} -n ${shellQuote(b.directory)}`;
+function addFilter(initial){const row=element('div',undefined,'filter'), key=element('select'), value=element('select',undefined,'value'), remove=element('button','Remove');key.setAttribute('aria-label','Metadata field');value.setAttribute('aria-label','Metadata value');for(const field of fields)key.append(option(field,field));key.value=initial||fields[0];function populate(){value.replaceChildren(option('','Any value'));const options=new Map();for(const b of batches)options.set(pairKey(b,key.value),pairText(b,key.value));for(const [v,text] of [...options].sort((a,b)=>a[1].localeCompare(b[1])))value.append(option(v,text));render();}key.addEventListener('change',populate);value.addEventListener('change',render);remove.addEventListener('click',()=>{row.remove();render();});row.append(key,value,remove);$('filters').append(row);populate();}
+async function copyCommand(text,input){input.focus();input.select();try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(text);}else if(!document.execCommand('copy')){throw Error('clipboard unavailable');}$('status').textContent='Command copied. Paste it into your remote IDE terminal.';}catch{$('status').textContent='Clipboard unavailable. The command is selected; copy it manually.';}}
+function cell(row,text){const td=element('td',text);row.append(td);return td;}
+const expandedGroups=new Set();
+const byUid=new Map(batches.map(batch=>[batch.uid,batch]));
+function matchingBatches(){
+  const search=$('search').value.trim().toLowerCase();
+  const filters=[...$('filters').children].map(row=>[row.children[0].value,row.children[1].value]);
+  return batches.filter(batch=>(!search||JSON.stringify(batch).toLowerCase().includes(search))&&filters.every(([key,value])=>!value||pairKey(batch,key)===value));
+}
+function groupBatches(matching){
+  const groups=new Map();
+  for(const batch of matching){if(!groups.has(batch.group_id))groups.set(batch.group_id,[]);groups.get(batch.group_id).push(batch);}
+  return [...groups.values()];
+}
+function navigateToBatch(uid){
+  const target=byUid.get(uid);
+  if(!target)return;
+  // Clear filters only when necessary so a related batch is never a dead link.
+  if(!matchingBatches().some(batch=>batch.uid===uid)){
+    $('search').value='';
+    for(const row of $('filters').children)row.children[1].value='';
+    $('status').textContent='Filters cleared to reveal the selected batch.';
+  }
+  expandedGroups.add(target.group_id);
+  render();
+  window.location.hash=`batch-${uid}`;
+  const row=document.getElementById(`batch-${uid}`);
+  if(row){row.scrollIntoView({behavior:'smooth',block:'center'});row.classList.add('highlight');setTimeout(()=>row.classList.remove('highlight'),3000);}
+}
+function relatedBadge(batch){
+  if(!batch.related.length)return null;
+  const detail=element('details',undefined,`rendering-links${batch.redundant_of?' redundant':''}`);
+  const label=batch.redundant_of?'Redundant':`Other renderings · ${batch.related.length}`;
+  const summary=element('summary',label);
+  summary.title=batch.redundant_of?'A newer batch has the same recorded rendering fingerprint.':'Batches using the same baseline/comparison directories, or an identical rendering fingerprint.';
+  const contents=element('div',undefined,'related-list');
+  contents.append(element('strong',batch.redundant_of?'Redundant: a newer equivalent rendering exists.':'Related diagram generations'));
+  const list=element('ul');
+  for(const peer of batch.related){
+    const li=element('li'),link=element('a',peer.generated.replace('T',' ').replace('+00:00',' UTC'));
+    link.href=`#batch-${peer.uid}`;
+    link.addEventListener('click',event=>{event.preventDefault();navigateToBatch(peer.uid);});
+    li.append(link,element('small',peer.reason));
+    if(peer.uid===batch.redundant_of)li.append(element('small','Newest equivalent rendering'));
+    list.append(li);
+  }
+  contents.append(list,element('small','No batches are deleted automatically.'));
+  detail.append(summary,contents);
+  return detail;
+}
+function batchRow(batch,{members=null,member=false}={}){
+  const tr=element('tr',undefined,member?'member-row':'');tr.id=`batch-${batch.uid}`;
+  const generated=cell(tr);
+  if(members&&members.length>1){
+    const expanded=expandedGroups.has(batch.group_id);
+    const toggle=element('button',expanded?'▾':'▸','disclosure');
+    toggle.setAttribute('aria-label',`${expanded?'Collapse':'Expand'} ${members.length} batches with matching configurations`);
+    toggle.setAttribute('aria-expanded',String(expanded));
+    toggle.addEventListener('click',()=>{if(expandedGroups.has(batch.group_id))expandedGroups.delete(batch.group_id);else expandedGroups.add(batch.group_id);render();});
+    generated.append(toggle);
+  }
+  generated.append(element('span',batch.generated.replace('T',' ').replace('+00:00',' UTC')));
+  if(members&&members.length>1)generated.append(element('span',`Newest of ${members.length} matching batches`,'group-size'));
+  const comparison=cell(tr,`${batch.labels.baseline} → ${batch.labels.comparison}`);
+  const variants=element('div',undefined,'variant-settings');variants.append(settingsList(batch,'variant'));comparison.append(variants);
+  comparison.append(element('small',`${batch.queries.length} queries · ${batch.figures} figures`));
+  for(const key of ['scale_factor','execution_mode'])cell(tr,pairText(batch,key));
+  cell(tr).append(settingsList(batch,'optimization'));
+  const actions=cell(tr);actions.className='actions';
+  const button=element('button',undefined,'copy-button');
+  const copyLabel=`Copy open command · ${editor==='code'?'VS Code':'Antigravity'}`;
+  button.setAttribute('aria-label',copyLabel);button.title=copyLabel;
+  button.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4"/></svg>';
+  const input=element('input');input.value=command(batch);input.readOnly=true;input.setAttribute('aria-label','Editor command');
+  button.addEventListener('click',()=>copyCommand(command(batch),input));
+  const line=element('div',undefined,'command');line.append(input,button);actions.append(line,element('p',batch.directory,'path'));
+  const link=element('a','Manifest');link.href=batch.manifest.split('/').map(encodeURIComponent).join('/');actions.append(link);
+  const badge=relatedBadge(batch);if(badge)actions.append(badge);
+  const detail=element('details');detail.append(element('summary','Full input metadata'));
+  detail.append(element('pre',JSON.stringify(batch.metadata,null,2),'detail'));actions.append(detail);
+  const fingerprint=element('details');fingerprint.append(element('summary',batch.rendering?'Rendering fingerprint':'Rendering fingerprint not recorded (legacy batch)'));
+  if(batch.rendering)fingerprint.append(element('pre',JSON.stringify(batch.rendering,null,2),'detail'));
+  actions.append(fingerprint);
+  if(batch.notices.length){const notice=element('details',undefined,'notice');notice.append(element('summary',`${batch.notices.length} comparison notices`),element('pre',batch.notices.join('\n'),'detail'));actions.append(notice);}
+  return tr;
+}
+function render(){
+  const matching=matchingBatches(),groups=groupBatches(matching),grouped=$('group-matching').checked;
+  $('expand-all').disabled=!grouped;$('collapse-all').disabled=!grouped;
+  $('count').textContent=`${matching.length} of ${batches.length} batches${grouped?` · ${groups.length} configurations`:''}`;
+  $('rows').replaceChildren();
+  if(grouped){
+    for(const members of groups){const representative=members[0];$('rows').append(batchRow(representative,{members}));if(expandedGroups.has(representative.group_id))for(const batch of members.slice(1))$('rows').append(batchRow(batch,{member:true}));}
+  }else for(const batch of matching)$('rows').append(batchRow(batch));
+  if(!matching.length){const tr=element('tr'),td=cell(tr,batches.length?'No matching batches. Adjust the filters.':'No completed batches found. Generate plots to populate this index.');td.colSpan=6;$('rows').append(tr);}
+}
+$('group-matching').addEventListener('change',render);
+$('expand-all').addEventListener('click',()=>{for(const batch of matchingBatches())expandedGroups.add(batch.group_id);render();});
+$('collapse-all').addEventListener('click',()=>{expandedGroups.clear();render();});
+$('search').addEventListener('input',render);$('add').addEventListener('click',()=>addFilter());$('reset').addEventListener('click',()=>{$('search').value='';$('filters').replaceChildren();for(const key of ['scale_factor','execution_mode','optimization'])addFilter(key);render();});for(const key of ['scale_factor','execution_mode','optimization'])addFilter(key);render();
+if(window.location.hash.startsWith('#batch-'))navigateToBatch(window.location.hash.slice(7));
+</script>
+</body>
+</html>

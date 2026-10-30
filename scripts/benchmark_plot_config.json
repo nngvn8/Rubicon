@@ -21,6 +21,6 @@
     "duration_exceedance"
   ],
   "queries_per_page": 6,
-  "output_dir": "../generated/benchmark-comparison",
+  "output_dir": "../generated/benchmark-comparisons",
   "change_queries_per_page": 13
 }

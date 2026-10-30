@@ -8,7 +8,16 @@ benchmark:
   workers_per_cu: 48
   scale_factor: 2
 
-# Add future plan transformations here without changing the runner schema.
+# Describe the settings used to generate the prebuilt plans.
+# This metadata does not enable or disable optimizations in the runner.
+optimization:
+  mat_type: lateMatHybrid  # std, lateMat, or lateMatHybrid
+  gco: false
+  merge_sort: true
+  semi_joins: false
+  materialize_into_join: false
+
+# Additional experiment variant metadata.
 variant:
   materialize_into_join: false
 

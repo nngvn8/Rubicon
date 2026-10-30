@@ -41,6 +41,15 @@ PLAN_SOURCES = {
     "plans": REPOSITORY_ROOT / "data" / "plans",
     "pb_plans": REPOSITORY_ROOT / "data" / "pb_plans",
 }
+# Metadata for the prebuilt plans; these values do not transform the plans.
+DEFAULT_OPTIMIZATION = {
+    "mat_type": "lateMatHybrid",
+    "gco": True,
+    "merge_sort": True,
+    "semi_joins": False,
+    "materialize_into_join": False,
+}
+
 DEFAULT_BENCHMARK_CONFIG = Path(__file__).resolve().parent / "configs" / "benchmark_example.yaml"
 
 # Threading (or maybe also not) - not sure if needed
@@ -299,11 +308,18 @@ def load_benchmark_config(config_path: Optional[str]) -> Dict:
         raise ValueError(f"could not read config {path}: {error}") from error
     if not isinstance(config, dict):
         raise ValueError("benchmark config must contain a YAML mapping")
-    for key in ("benchmark", "variant", "experiment"):
+    for key in ("benchmark", "variant", "experiment", "optimization"):
         if key in config and not isinstance(config[key], dict):
             raise ValueError(f"config field {key!r} must be a mapping")
     if "plan_source" in config and config["plan_source"] not in PLAN_SOURCES:
         raise ValueError(f"config plan_source must be one of: {', '.join(PLAN_SOURCES)}")
+    optimization = {**DEFAULT_OPTIMIZATION, **config.get("optimization", {})}
+    if optimization["mat_type"] not in ("std", "lateMat", "lateMatHybrid"):
+        raise ValueError("optimization mat_type must be std, lateMat, or lateMatHybrid")
+    for key, value in optimization.items():
+        if key != "mat_type" and not isinstance(value, bool):
+            raise ValueError(f"optimization field {key!r} must be a boolean")
+    config["optimization"] = optimization
     if "variant" in config:
         config["variant"] = {
             str(key): normalize_variant_value(value)
@@ -531,6 +547,8 @@ def main():
                 "cu_restarted_between_runs": False,
                 "plan_source": args.f if args.f else args.plan_source,
                 "query_order": [Path(query).name for query in query_list],
+                "execution_mode": "sequential",
+                "optimization": benchmark_config.get("optimization", dict(DEFAULT_OPTIMIZATION)),
                 "variant": variant,
                 "experiment": benchmark_config.get("experiment", {}),
                 "config_file": args.config,

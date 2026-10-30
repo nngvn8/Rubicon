@@ -172,5 +172,270 @@ class BenchmarkTests(unittest.TestCase):
                     read_config(path)
 
 
+class BatchOutputTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def test_compact_names_and_overrides(self):
+        from benchmark_output import compact_variant, comparison_parent, comparison_name
+        from types import SimpleNamespace
+        directory = self.root / "legacy-variant" / "execution"
+        self.assertEqual(compact_variant({"variant": {"materialize_into_join": False}}, directory), "baseline")
+        self.assertEqual(compact_variant({"variant": {"materialize_into_group": True, "materialize_into_join": True}}, directory), "mat-join-group")
+        self.assertEqual(compact_variant({}, directory), "legacy-variant")
+        self.assertNotEqual(compact_variant({"variant": {"other": False}}, directory), compact_variant({"variant": {"other": True}}, directory))
+        config = {"output_dir": self.root, "baseline": {"directory": directory}, "comparison": {"directory": directory}}
+        experiments = [SimpleNamespace(metadata={"variant": {"materialize_into_join": value}, "workers_per_cu": 48, "scale_factor": 2}) for value in (False, True)]
+        self.assertEqual(comparison_parent(config, experiments), self.root / "batches")
+        self.assertEqual(comparison_name(config, experiments), "baseline__vs__mat-join")
+        config["baseline"]["id"] = "custom"
+        config["name"] = "trial"
+        self.assertEqual(comparison_name(config, experiments), "trial")
+
+    def test_collision_and_concurrent_reservations_preserve_batches(self):
+        from benchmark_output import output_batch
+        with output_batch(self.root, "2026-10-30T12-00-00Z") as (staging, first):
+            self.assertFalse(first.exists())
+            (staging / "figure.png").write_bytes(b"first")
+            with output_batch(self.root, "2026-10-30T12-00-00Z") as (other, second):
+                (other / "figure.png").write_bytes(b"second")
+        self.assertNotEqual(first, second)
+        self.assertEqual((first / "figure.png").read_bytes(), b"first")
+        self.assertEqual((second / "figure.png").read_bytes(), b"second")
+        with output_batch(self.root, "2026-10-30T12-00-00Z") as (staging, third):
+            (staging / "figure.png").write_bytes(b"third")
+        self.assertEqual(third.name, "2026-10-30T12-00-00Z_02")
+
+    def test_published_batch_inherits_parent_permissions(self):
+        from benchmark_output import output_batch
+        import stat
+        self.root.chmod(0o775)
+        with output_batch(self.root, "2026-10-30T12-00-00Z") as (staging, final):
+            (staging / "figure.png").write_bytes(b"test")
+        self.assertEqual(stat.S_IMODE(final.stat().st_mode), 0o775)
+
+    def test_failed_batch_is_not_published(self):
+        from benchmark_output import output_batch
+        with self.assertRaisesRegex(RuntimeError, "render failure"):
+            with output_batch(self.root, "2026-10-30T12-00-00Z") as (staging, final):
+                (staging / "partial.png").write_bytes(b"partial")
+                raise RuntimeError("render failure")
+        self.assertFalse(final.exists())
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_manifest_fingerprints_and_input_changes(self):
+        from benchmark_output import input_fingerprints, write_manifest
+        from types import SimpleNamespace
+        config = {"output_dir": self.root}
+        experiments = []
+        for role in ("baseline", "comparison"):
+            directory = self.root / role
+            directory.mkdir()
+            (directory / "results.json").write_text("{}")
+            config[role] = {"directory": directory, "label": role}
+            experiments.append(SimpleNamespace(metadata={"variant": {"role": role}}))
+        fingerprints = input_fingerprints(config)
+        output = self.root / "batch"
+        (output / "change").mkdir(parents=True)
+        (output / "change" / "test.png").write_bytes(b"test")
+        write_manifest(output, config, experiments, fingerprints, ["q1.pb"], [])
+        manifest = json.loads((output / "manifest.json").read_text())
+        self.assertEqual(manifest["figures"], ["change/test.png"])
+        self.assertFalse(list(output.rglob("metadata.md")))
+        self.assertEqual(manifest["inputs"]["baseline"]["sha256"], fingerprints["baseline"]["sha256"])
+        (config["baseline"]["directory"] / "results.json").write_text('{"changed":true}')
+        with self.assertRaisesRegex(ValueError, "changed during plotting"):
+            write_manifest(output, config, experiments, fingerprints, ["q1.pb"], [])
+
+    def test_configuration_caption_preserves_recorded_settings(self):
+        from benchmark_output import configuration_caption, add_configuration_caption
+        from types import SimpleNamespace
+        import matplotlib.pyplot as plt
+        metadata = {"variant": {"materialize_into_join": True}, "optimization": {"gco": False},
+                    "execution_mode": "sequential", "experiment": {"setting": 42, "notes": "prose"}}
+        experiment = SimpleNamespace(metadata=metadata, label="Example")
+        config = {role: {"directory": self.root / role} for role in ("baseline", "comparison")}
+        lines = configuration_caption(config, [experiment, experiment], "batch-id")
+        caption = "\n".join(lines)
+        self.assertIn('optimization={"gco":false}', caption)
+        self.assertIn('execution_mode="sequential"', caption)
+        self.assertIn('experiment={"setting":42}', caption)
+        self.assertNotIn("prose", caption)
+        figure, axis = plt.subplots()
+        self.addCleanup(plt.close, figure)
+        figure.text(.5, .02, "existing footer")
+        previous_height = figure.get_figheight()
+        add_configuration_caption(figure, lines)
+        self.assertGreater(figure.get_figheight(), previous_height)
+        self.assertIn("batch-id", figure.texts[-1].get_text())
+        self.assertGreater(axis.get_position().y0, .11)
+
+    def test_name_overrides_cannot_escape_output(self):
+        from benchmark_output import validate_name
+        for name in ("../escape", "/absolute", "..", "a/b", "a__vs__b"):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                validate_name(name, "name")
+
+
+class IndexTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def make_batch(self, directory, marker="original"):
+        directory.mkdir(parents=True)
+        manifest = {
+            "generated_at": "2026-10-30T12:00:00+00:00", "batch_id": "stable-id",
+            "config": {role: {"label": role} for role in ("baseline", "comparison")},
+            "inputs": {role: {"metadata": {"variant": {"materialize_into_join": role == "comparison"},
+                       "optimization": {"gco": False}, "scale_factor": 2}}
+                       for role in ("baseline", "comparison")},
+            "figures": ["chart.png"], "queries": ["q1.pb"], "notices": [],
+        }
+        (directory / "manifest.json").write_text(json.dumps(manifest))
+        (directory / "chart.png").write_text(marker)
+        return manifest
+
+    def test_index_uses_metadata_and_embeds_json_safely(self):
+        from benchmark_index import write_index, batch_records
+        directory = self.root / "batches" / "batch"
+        manifest = self.make_batch(directory)
+        manifest["config"]["baseline"]["label"] = "</script><script>alert(1)</script>"
+        (directory / "manifest.json").write_text(json.dumps(manifest))
+        records = batch_records(self.root)
+        self.assertIs(records[0]["fields"]["baseline"]["optimization.gco"], False)
+        self.assertNotIn("execution_mode", records[0]["fields"]["baseline"])
+        html = write_index(self.root).read_text()
+        self.assertNotIn("</script><script>alert(1)", html)
+        self.assertIn("antigravity-ide", html)
+        self.assertIn(" -n ", html)
+        self.assertIn("stable-id", html)
+        self.assertNotIn("__BATCH_DATA__", html)
+
+    def test_migration_preserves_images_manifests_and_handles_collisions(self):
+        from benchmark_index import migrate_batches, batch_records
+        first = self.root / "old-comparison" / "w48_sf2" / "2026-10-30T12-00-00Z"
+        manifest = self.make_batch(first)
+        second = self.root / "another-comparison" / "w48_sf2" / first.name
+        self.make_batch(second, "second")
+        moved = migrate_batches(self.root)
+        self.assertEqual(len(moved), 2)
+        self.assertEqual(len({path.name for path in moved}), 2)
+        self.assertEqual({(path / "chart.png").read_text() for path in moved}, {"original", "second"})
+        self.assertTrue(all(path.parent == self.root / "batches" for path in moved))
+        self.assertTrue(all(json.loads((path / "manifest.json").read_text()) == manifest for path in moved))
+        self.assertEqual(len(batch_records(self.root)), 2)
+        self.assertEqual(migrate_batches(self.root), [])
+
+    def test_staging_directories_are_not_indexed(self):
+        from benchmark_index import batch_records, write_index
+        self.make_batch(self.root / "batches" / ".plotting-partial")
+        self.assertEqual(batch_records(self.root), [])
+        self.assertTrue(write_index(self.root).is_file())
+
+
+class RenderingFingerprintTests(unittest.TestCase):
+    def setUp(self):
+        self.config = {
+            "baseline": {"label": "Unmerged", "directory": "/data/a"},
+            "comparison": {"label": "Merged", "directory": "/data/b"},
+            "metrics": ["total_response_time", "operator_work"],
+            "plots": ["rounds", "change"], "queries_per_page": 6, "change_queries_per_page": 13,
+            "output_dir": "/output", "name": "display-name",
+        }
+        self.inputs = {"baseline": {"sha256": "a" * 64}, "comparison": {"sha256": "b" * 64}}
+        self.environment = {"python": "test", "matplotlib": "test", "backend": "Agg"}
+        self.code = {"benchmark_figures.py": "c" * 64}
+
+    def fingerprint(self, config=None, inputs=None, queries=None, **kwargs):
+        from benchmark_output import rendering_fingerprint
+        return rendering_fingerprint(config or self.config, inputs or self.inputs,
+                                     ["q1.pb", "q2.pb"] if queries is None else queries,
+                                     environment=kwargs.get("environment", self.environment),
+                                     code_hashes=kwargs.get("code_hashes", self.code))
+
+    def test_storage_names_and_plot_generation_order_are_excluded(self):
+        import copy
+        changed = copy.deepcopy(self.config)
+        changed["output_dir"] = "/elsewhere"
+        changed["name"] = "another-name"
+        changed["baseline"]["directory"] = "/copied/a"
+        changed["baseline"]["id"] = "alias"
+        changed["plots"].reverse()
+        self.assertEqual(self.fingerprint(), self.fingerprint(changed))
+
+    def test_rendering_changes_are_distinguished(self):
+        import copy
+        original = self.fingerprint()
+        variants = []
+        for key, value in (("metrics", ["operator_work", "total_response_time"]),
+                           ("plots", ["change"]), ("queries_per_page", 3), ("change_queries_per_page", 12)):
+            config = copy.deepcopy(self.config)
+            config[key] = value
+            variants.append(self.fingerprint(config))
+        config = copy.deepcopy(self.config)
+        config["baseline"]["label"] = "Different label"
+        variants.extend([self.fingerprint(config), self.fingerprint(queries=["q2.pb", "q1.pb"]),
+                         self.fingerprint(queries=["q1.pb"]),
+                         self.fingerprint(environment={"python": "different"}),
+                         self.fingerprint(code_hashes={"benchmark_figures.py": "changed"}),
+                         self.fingerprint(inputs={"baseline": self.inputs["comparison"], "comparison": self.inputs["baseline"]})])
+        for result in variants:
+            self.assertNotEqual(original["sha256"], result["sha256"])
+
+    def test_schema_and_payload_are_verifiable(self):
+        import hashlib
+        from benchmark_output import canonical_json
+        result = self.fingerprint()
+        self.assertEqual(result["payload"]["schema_version"], 1)
+        self.assertEqual(result["sha256"], hashlib.sha256(canonical_json(result["payload"]).encode()).hexdigest())
+
+    def test_newest_duplicate_is_retained_and_legacy_is_unverified(self):
+        import tempfile
+        from pathlib import Path
+        from benchmark_index import batch_records
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for index in range(3):
+                directory = root / str(index)
+                directory.mkdir()
+                manifest = {"generated_at": f"2026-10-30T12:00:0{index}+00:00", "batch_id": str(index),
+                            "config": self.config, "inputs": {role: {**self.inputs[role], "metadata": {
+                                "scale_factor": 2, "created_at": str(index), "config_file": str(index),
+                                "experiment": {"notes": str(index)}}} for role in self.inputs},
+                            "queries": ["q1.pb", "q2.pb"], "figures": []}
+                if index:
+                    manifest["rendering"] = self.fingerprint()
+                (directory / "manifest.json").write_text(json.dumps(manifest))
+            records = batch_records(root)
+            self.assertEqual([record["id"] for record in records], ["2", "1", "0"])
+            self.assertEqual(len({record["group_id"] for record in records}), 1)
+            self.assertIsNone(records[0]["redundant_of"])
+            self.assertEqual(records[1]["redundant_of"], records[0]["uid"])
+            self.assertIsNone(records[2]["rendering"])
+            self.assertIsNone(records[2]["redundant_of"])
+            self.assertEqual(len(records[0]["related"]), 2)
+            # A changed manifest config must not retain a valid rendering fingerprint.
+            path = root / "1" / "manifest.json"
+            manifest = json.loads(path.read_text())
+            manifest["config"]["metrics"] = ["operator_work"]
+            path.write_text(json.dumps(manifest))
+            self.assertIsNone(batch_records(root)[1]["rendering"])
+
+    def test_grouping_keeps_execution_differences_and_unknown_settings(self):
+        from benchmark_index import configuration_metadata
+        from benchmark_output import canonical_json
+        original = {"query_order": ["q1", "q2"], "host": "a", "execution_mode": "sequential",
+                    "experiment": {"setting": 1, "reason": "ignored"}}
+        grouped = configuration_metadata(original)
+        self.assertEqual(grouped["experiment"], {"setting": 1})
+        for key, value in (("host", "b"), ("query_order", ["q2", "q1"]),
+                           ("execution_mode", "parallel"), ("new_setting", False)):
+            self.assertNotEqual(canonical_json(grouped), canonical_json(configuration_metadata({**original, key: value})))
+
+
 if __name__ == "__main__":
     unittest.main()
