@@ -1,0 +1,26 @@
+{
+  "baseline": {
+    "directory": "../benchmarking/materialize_into_join=false/2026-10-29T13-42-25Z_workers-48_sf-2_runs-20",
+    "label": "Unmerged"
+  },
+  "comparison": {
+    "directory": "../benchmarking/materialize_into_join=true/2026-10-27T09-51-50Z_workers-48_sf-2_runs-20",
+    "label": "Merged"
+  },
+  "metrics": [
+    "total_response_time",
+    "plan_duration",
+    "operator_work"
+  ],
+  "queries": null,
+  "plots": [
+    "change",
+    "rounds",
+    "metric_comparison",
+    "metric_relationships",
+    "duration_exceedance"
+  ],
+  "queries_per_page": 6,
+  "output_dir": "../generated/benchmark-comparison",
+  "change_queries_per_page": 13
+}
