@@ -1,0 +1,38 @@
+{
+  "baseline": {
+    "label": "Unmerged"
+  },
+  "comparison": {
+    "label": "Merged"
+  },
+  "queries": null,
+  "plots": [
+    "cross_scale"
+  ],
+  "output_dir": "../../benchmarking/plots/benchmark-comparisons",
+  "cross_scale": {
+    "metric": "total_response_time",
+    "scaling_interval": [
+      50,
+      100
+    ],
+    "pairs": [
+      {
+        "baseline": "../../benchmarking/data/materialize_into_join=false/concurrent/2026-11-01T04-17-17Z_sf-2_runs-20_workers-48",
+        "comparison": "../../benchmarking/data/materialize_into_join=true/concurrent/2026-11-01T15-53-44Z_sf-2_runs-20_workers-48"
+      },
+      {
+        "baseline": "../../benchmarking/data/materialize_into_join=false/concurrent/2026-11-01T04-17-51Z_sf-50_runs-20_workers-48",
+        "comparison": "../../benchmarking/data/materialize_into_join=true/concurrent/2026-11-01T15-54-17Z_sf-50_runs-20_workers-48"
+      },
+      {
+        "baseline": "../../benchmarking/data/materialize_into_join=false/concurrent/2026-11-01T04-30-18Z_sf-100_runs-20_workers-48",
+        "comparison": "../../benchmarking/data/materialize_into_join=true/concurrent/2026-11-01T16-06-20Z_sf-100_runs-20_workers-48"
+      }
+    ],
+    "color_limits": [
+      -20,
+      20
+    ]
+  }
+}

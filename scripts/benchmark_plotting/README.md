@@ -7,13 +7,28 @@ available for legacy JSON files.
 Install dependencies in your Python environment if needed:
 
 ```bash
-python3 -m pip install -r scripts/requirements-plotting.txt
+python3 -m pip install -r scripts/benchmark_plotting/requirements.txt
 ```
 
 Run from the repository root:
 
 ```bash
-python3 scripts/plot_benchmarks.py --config scripts/benchmark_plot_config.json
+python3 scripts/benchmark_plotting/plot_benchmarks.py --config scripts/benchmark_plotting/config.json
+```
+
+The supplied configurations are separated by purpose:
+
+- `config.json`: normal plots comparing concurrent Unmerged/Merged runs at SF 100,
+  using all three timing metrics.
+- `config_cross_scale.json`: only the cross-scale figure, using concurrent pairs
+  at SF 2, 50 and 100; response time; SF 50→100 scaling interval.
+- `config_template.json`: the previous combined configuration, retained as an
+  example of generating normal and cross-scale plots together (sequential inputs).
+
+Generate the concurrent cross-scale figure with:
+
+```bash
+python3 scripts/benchmark_plotting/plot_benchmarks.py --config scripts/benchmark_plotting/config_cross_scale.json
 ```
 
 All configuration paths are relative to the configuration file. Set `baseline`
@@ -29,11 +44,12 @@ Configuration options:
   duration, rather than elapsed plan time.
 - `queries`: null for all queries, or a list of exact plan filenames including
   `.pb`. Queries use natural numeric ordering.
-- `plots`: any of `change`, `distribution`, `rounds`, `metric_comparison`, `metric_relationships`; defaults to `change`, `rounds`, `metric_comparison`, and `metric_relationships`. Add `distribution` explicitly to generate it.
+- `plots`: any of `change_ci`, `change`, `distribution`, `rounds`, `metric_comparison`, `metric_relationships`, and `duration_exceedance`; these are enabled by default except `distribution`.
+  The optional `cross_scale` plot requires its own input-pair section below.
 - `queries_per_page`: distribution/round panels per page; defaults to 6.
 - `change_queries_per_page`: queries per change chart; defaults to 13
   (13 horizontal intervals).
-- `output_dir`: root for timestamped batches (default: `../generated/benchmark-comparisons`).
+- `output_dir`: fixed to the repository’s `benchmarking/plots/benchmark-comparisons`; batches are written beneath `batches/`. Omit this field to use that location regardless of where the config lives.
 - `baseline.id` / `comparison.id`: optional short comparison identifiers.
 - `name`: optional batch-description override, replacing the derived comparison name.
   Overrides accept filename characters only, without directory separators.
@@ -50,34 +66,68 @@ restart policy. Failure counts and incomplete sample counts are printed;
 failures are not replaced with timings. Warmup observations are not stored in
 this benchmark format. Stored summaries are ignored in favor of raw samples.
 
-The implementation separates data loading and statistics (`benchmark_data.py`),
-rendering (`benchmark_figures.py`), batch naming/export (`benchmark_output.py`), and configuration/orchestration
-(`plot_benchmarks.py`). `METRICS` defines shared labels and units. To add a plot,
+The implementation separates data loading and statistics (`data.py`),
+rendering (`plots.py`), configuration and batch export (`plot_benchmarks.py`),
+and the HTML results browser (`index.py` and `index.html`). `METRICS` defines shared labels and units. To add a plot,
 add a rendering function and register its name in the CLI.
 
 Run focused data and configuration checks:
 
 ```bash
-python3 -m unittest discover -s scripts -p 'test_benchmark_plots.py'
+python3 -m unittest discover -s scripts/benchmark_plotting/tests
 ```
 
-The change chart shows one horizontal box-and-whisker interval per query.
-For every combination of one baseline timing and one comparison timing, it
-calculates `100 * (comparison / baseline - 1)`. Negative means faster. This
-uses both empirical timing distributions without assuming matching rounds are
-paired. The combinations reuse observations; they are not independent samples.
-Labels report original sample counts (baseline/comparison), not pair counts.
+All percentage-change summaries compare the two timing medians:
+`100 * (median(comparison) / median(baseline) - 1)`. Negative means faster.
+This applies to change labels, metric-comparison markers, and cross-scale
+heatmap cells. No Cartesian product or round pairing is used.
 
-The line and label show the median of these changes; the box spans the
-25th–75th percentiles and whiskers span the 5th–95th percentiles. Tail values
-outside that range are omitted from the display, not removed before calculating
-quantiles. These are descriptive ranges, not confidence intervals, guaranteed
-best/worst cases, or bounds on future measurements. The median can differ from
-a percentage change calculated from the two timing medians.
-The shaded ±2% region marks measurement tolerance. A violin is intentionally
-avoided: estimating a smooth density from 20 timings adds detail without more
-independent evidence. Zero baseline observations and absent samples make the
-interval unavailable. Single observations yield a collapsed interval.
+The change chart shows one blue horizontal box-and-whisker interval per query
+for the comparison variant, normalized against the baseline median:
+`100 * (comparison timing / baseline median - 1)`. The line and label equal
+the percentage change between the two timing medians. Labels report original
+sample counts (baseline/comparison). Boxes span the comparison's 25th–75th
+percentiles and whiskers span its 5th–95th percentiles. These describe comparison
+timing spread relative to the fixed baseline median, not confidence intervals
+for the median change or bounds on future measurements. Tail observations
+outside the whiskers are retained when calculating medians and quantiles. The
+shaded ±2% region marks practical tolerance. A zero baseline median or absent
+samples makes the change unavailable; individual zero timings remain valid when
+that median is positive. Single observations yield collapsed intervals.
+
+`change_ci` is an optional, separate confidence-interval chart. The existing
+`change` chart continues to show timing spread. Enable it with:
+
+```json
+"plots": ["change_ci"],
+"bootstrap": {"resamples": 10000, "confidence": 0.95, "seed": 0}
+```
+
+The dot is the observed percentage change between medians. The line is an
+**exploratory percentile-bootstrap confidence interval**. The recipe is:
+
+1. Draw a replacement sample from the baseline, of the original baseline size.
+2. Independently draw a replacement sample from the comparison, of its size.
+3. Recalculate both medians and `100 * (comparison median / baseline median - 1)`.
+4. Repeat 10,000 times. For a 95% interval, use the 2.5th and 97.5th percentiles
+   of these changes. The interval need not be symmetric around the observed dot.
+
+Both distributions influence the interval. Matching round numbers are **not**
+paired. This simple method assumes independent, representative observations
+within each input directory. It does not account for between-session variation,
+serial dependence, warm-up, or differences in conditions between batches.
+With 20 samples, treat the intervals as approximate; more resamples do not add
+new experimental information. These are individual intervals per query/metric,
+not simultaneous confidence statements for the whole collection.
+
+The implementation in `bootstrap.py` follows these steps with comments. Seeds
+are deterministic per query/metric, so pagination does not change results.
+`bootstrap_summary.csv` contains the estimates, endpoints, sample counts, and
+explicit availability status; the manifest records its path and method settings.
+Missing samples, fewer than two samples per variant, a zero baseline median,
+or any zero resampled baseline median make the CI unavailable. Undefined ratios
+are never silently discarded. Constant samples can produce a collapsed interval;
+that does not establish absence of variation outside the observed batch.
 
 All round panels show `100 * (round value / baseline median - 1)`
 for both plan types, using one shared reference per query. Dashed colored lines
@@ -87,13 +137,13 @@ the absolute baseline median. Missing/zero baseline medians make the relative
 panel unavailable.
 
 Change whisker endpoints are annotated with signed absolute duration differences
-using automatic units and three significant digits. These deltas come from the
-same ranked timing combinations (and interpolation) as the percentage endpoints,
-rather than independently calculated absolute-difference percentiles.
+using automatic units and three significant digits. Each delta is the corresponding
+comparison timing quantile minus the baseline timing median, using the same
+fixed reference as the percentage endpoints.
 
 `metric_comparison` generates one `metric_comparison.png` with all selected queries
-and metrics, without pagination. Each colored marker is the same median unpaired
-percentage change shown in the corresponding change chart. Gray lines connect
+and metrics, without pagination. Each colored marker is the same percentage change between
+timing medians shown in the corresponding change chart. Gray lines connect
 the lowest and highest metric values per query; gray shading marks ±2%. Marker
 shapes distinguish overlapping metrics. This overview omits variability intervals;
 use the individual change charts for those. Missing metrics are flagged per row.
@@ -121,7 +171,7 @@ threshold is deliberately not applied to this invariant check.
 ## Output batches and static index
 
 ```text
-generated/benchmark-comparisons/
+benchmarking/plots/benchmark-comparisons/
     index.html
     batches/
         2026-10-30T14-32-08Z_baseline__vs__mat-join/
@@ -149,13 +199,13 @@ referring to `manifest.json` for full details. No separate `metadata.md` is crea
 Plotting automatically rebuilds `index.html`. To rebuild without plotting:
 
 ```bash
-python3 scripts/benchmark_index.py
+python3 scripts/benchmark_plotting/index.py
 ```
 
 To migrate legacy nested batches into the flat structure and rebuild:
 
 ```bash
-python3 scripts/benchmark_index.py --migrate
+python3 scripts/benchmark_plotting/index.py --migrate
 ```
 
 Migration moves completed batches, preserving image bytes, manifests, and batch
@@ -185,7 +235,7 @@ The page does not execute commands or open editor windows itself.
 Index interaction checks (if Node.js is available):
 
 ```bash
-node scripts/test_benchmark_index.js
+node scripts/benchmark_plotting/tests/test_index.js
 ```
 
 ## Grouping and chronology
@@ -227,7 +277,7 @@ manifest. The digest is SHA-256 over UTF-8 canonical JSON (`sort_keys=True`,
 | `plots` | Selected plot types, sorted (generation order alone is irrelevant) |
 | `labels` | Baseline and comparison display labels |
 | `pagination` | `queries_per_page` and `change_queries_per_page` |
-| `code` | File-content SHA-256 hashes of `benchmark_data.py`, `benchmark_figures.py`, `benchmark_output.py`, and `plot_benchmarks.py` |
+| `code` | File-content SHA-256 hashes of `data.py`, `plots.py`, `plot_benchmarks.py`, `index.py`, and `cross_scale.py` |
 | `environment` | Python, Matplotlib, NumPy, pandas and FreeType versions, plus the Matplotlib backend |
 
 Input hashes include both timings and metadata. Therefore even JSON whitespace
@@ -271,3 +321,116 @@ index never fabricates fingerprints for them. They remain eligible for metadata
 from those similarities. The current index does not delete files; redundancy
 badges support an explicit decision to remove older batch directories. Rebuild
 the index after any manual removal.
+
+
+## Optional comparison across scale factors
+
+Add `"cross_scale"` to `plots` and configure a `cross_scale` section in the same
+JSON file. The supplied `config_cross_scale.json` selects only this figure and
+includes the three November concurrent pairs (SF 2, 50 and 100), with response
+time and the SF 50→100 scaling interval. `config_template.json` demonstrates
+combining it with normal plots in one config. Remove `"cross_scale"` from `plots`
+to disable the additional figure. No additional command-line flags are used;
+the usual command reads all settings from the chosen file.
+
+For example, a standalone cross-scale configuration can contain:
+
+```json
+{
+  "baseline": {"label": "Unmerged"},
+  "comparison": {"label": "Merged"},
+  "plots": ["cross_scale"],
+  "queries": null,
+  "cross_scale": {
+    "metric": "total_response_time",
+    "scaling_interval": [50, 100],
+    "pairs": [
+      {"baseline": "relative/path/to/unmerged-sf2", "comparison": "relative/path/to/merged-sf2"},
+      {"baseline": "relative/path/to/unmerged-sf50", "comparison": "relative/path/to/merged-sf50"},
+      {"baseline": "relative/path/to/unmerged-sf100", "comparison": "relative/path/to/merged-sf100"}
+    ]
+  }
+}
+```
+
+Each directory contains `results.json`; paths resolve relative to the config
+file. Scale factors come from input metadata, not directory names or list order.
+At least two pairs are required; any larger number is supported. Labels and
+optional query selection are shared with ordinary plots. With only
+`"cross_scale"` selected, root-level baseline/comparison directories are optional.
+When combining it with ordinary plots, keep those directories for the existing
+single-pair comparisons. A separate cross-scale batch is exported alongside the
+ordinary batch.
+
+`cross_scale.metric` accepts `total_response_time` (default), `plan_duration`,
+or `operator_work`, independently of the ordinary `metrics` list.
+`scaling_interval` selects two increasing scale factors present in the inputs;
+omitting it selects the two largest. The dashed reference is their scale ratio,
+so SF 2→50 uses 25× rather than a fixed 2× reference.
+
+`cross_scale.color_limits` fixes the heatmap's color range, defaulting to
+`[-20, 20]` percent, with zero centered. Use the same limits to compare sequential
+and concurrent figures by color. Values beyond the limits use endpoint colors;
+the actual numeric annotations remain unchanged. The color bar marks clipping
+at both limits. Custom limits must be finite and span zero. Limits are recorded
+in the configuration and rendering fingerprint.
+
+The left panel uses the same percentage change between timing medians as the
+existing change plots. Each variant is summarized by its median before taking
+the ratio; no all-pairs comparisons are computed. Negative/blue means a lower
+value for the comparison variant. The right panel divides the per-query median
+at the higher scale by its median at the lower scale, independently per variant.
+These two statistical definitions are deliberately explicit in the figure.
+
+Validation rejects duplicate directories/scales, mismatching query sets,
+within-pair scale or worker mismatches, and incompatible execution settings.
+Within a pair, optimization and variant metadata may differ. Within each variant
+across scales, all configuration metadata except scale factor must match,
+including host, workers, execution mode, warmups, measured-round count, query
+order, compilation, plan source, restart policy, optimization flags and unknown
+future settings. Creation timestamps, config-file paths, and experiment prose
+(`notes`/`reason`) are excluded; structured experiment settings remain checked.
+Missing settings differ from explicitly recorded settings. Validation covers
+all supplied pairs, even when only some queries or scales enter the right panel.
+
+Failures, incomplete samples and zero values are retained as manifest notices.
+Unavailable ratios appear as `N/A`; failures are never replaced with timings.
+The heatmap is unavailable if the baseline median is zero or either median is missing. Scaling is
+unavailable if the lower-scale median is zero or either median is missing.
+
+Each cross-scale batch contains `cross_scale.png` and its own `manifest.json`.
+The manifest's `scale_pairs` records every input's complete metadata, absolute
+path and SHA-256, alongside resolved settings, query selection, notices, and
+rendering code/environment hashes. Inputs and rendering dependencies are checked
+again before atomic publication. The index shows the scale-factor list and full
+per-input metadata, and groups cross-scale configurations separately from
+ordinary comparisons. Rendering fingerprint schema 2 covers the metric, interval,
+all input hashes, labels and query selection; pair ordering and storage paths do
+not affect the fingerprint. Ordinary fingerprints retain schema 1.
+
+To generate the exploratory bootstrap comparisons for every compatible merged /
+unmerged execution under `benchmarking/data`, run from the repository root:
+
+```bash
+python3 scripts/benchmark_plotting/generate_bootstrap.py --inventory-only
+python3 scripts/benchmark_plotting/generate_bootstrap.py
+```
+
+The driver excludes `archive`, `-O0`, and its own derived `bootstrap` data subtree.
+It matches all recorded settings except timestamps, descriptive experiment notes,
+and the merge switch being compared. Thus scale factor, execution mode
+(sequential/concurrent), worker count, compilation settings, host, and other
+optimization flags must agree. When multiple executions share settings, each
+compatible unmerged/merged directory pair is rendered separately; samples are
+never pooled or paired by round number across executions.
+
+Canonical numeric results are saved in
+`benchmarking/data/bootstrap/<run-id>/all_confidence_intervals.csv`. The adjacent
+`coverage.json` records source directories, pairing settings, exclusions,
+bootstrap settings, and output paths; the per-pair JSON configurations make
+individual comparisons reproducible. The underlying input fingerprints and code
+fingerprints are recorded in each plotting batch's manifest. Individual bootstrap
+draws are not retained: the CSV contains the observed median changes and interval
+endpoints. The linked overview is saved under
+`benchmarking/plots/benchmark-comparisons/bootstrap-reports/<run-id>/index.html`.
+The driver prints both locations when complete.

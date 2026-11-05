@@ -9,8 +9,44 @@ import json
 from pathlib import Path
 import tempfile
 import warnings
+import re
 
-from benchmark_output import canonical_json, compact_variant
+# Keep aliases explicit: unknown settings retain their full key and value.
+MATERIALIZATION_ALIASES = {
+    "materialize_into_join": "join",
+    "materialize_into_group": "group",
+    "materialize_into_operator": "operator",
+}
+
+
+
+def compact_variant(metadata, directory):
+    variant = metadata.get("variant")
+    if not isinstance(variant, dict) or not variant:
+        # The experiment directory's parent normally names its variant.
+        fallback = re.sub(r"[^A-Za-z0-9_.=-]+", "-", directory.parent.name).strip(".-")
+        return fallback or "unspecified"
+    enabled = []
+    extra = []
+    for key, value in sorted(variant.items()):
+        if key in MATERIALIZATION_ALIASES and type(value) is bool:
+            if value:
+                enabled.append(MATERIALIZATION_ALIASES[key])
+        else:
+            # Percent encoding prevents different punctuation from collapsing
+            # to the same compact name, and encodes path separators safely.
+            from urllib.parse import quote
+            token = json.dumps(value, ensure_ascii=True, separators=(",", ":"))
+            extra.append(f"{quote(key, safe='')}={quote(token, safe='')}")
+    # Give the common join+group combination its natural reading order.
+    enabled.sort(key=lambda name: (name != "join", name != "group", name))
+    base = "mat-" + "-".join(enabled) if enabled else "baseline"
+    return "_".join([base, *extra])
+
+def canonical_json(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+
+
 
 
 def flatten_metadata(metadata, prefix=""):
@@ -45,20 +81,32 @@ def verified_rendering(manifest):
     if not isinstance(rendering, dict) or not isinstance(rendering.get("payload"), dict):
         return None
     payload = rendering["payload"]
-    if payload.get("schema_version") != 1:
+    cross_scale = manifest.get("kind") == "cross_scale"
+    if payload.get("schema_version") != (2 if cross_scale else 1):
         return None
     digest = hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
     if digest != rendering.get("sha256"):
         return None
-    if payload.get("inputs") != {role: manifest["inputs"][role].get("sha256") for role in ("baseline", "comparison")}:
-        return None
     config = manifest["config"]
-    expected = {
-        "queries": manifest.get("queries", []), "metrics": config.get("metrics"),
-        "plots": sorted(config.get("plots", [])),
-        "labels": {role: config[role]["label"] for role in ("baseline", "comparison")},
-        "pagination": {key: config.get(key) for key in ("queries_per_page", "change_queries_per_page")},
-    }
+    if cross_scale:
+        expected_inputs = [{"scale_factor": pair["scale_factor"],
+                            **{role: pair[role]["sha256"] for role in ("baseline", "comparison")}}
+                           for pair in sorted(manifest["scale_pairs"], key=lambda item: item["scale_factor"])]
+        expected = {"kind": "cross_scale", "inputs": expected_inputs,
+                    "queries": manifest.get("queries", []),
+                    "metric": config["cross_scale"]["metric"],
+                    "scaling_interval": config["cross_scale"]["scaling_interval"],
+                    "labels": {role: config[role]["label"] for role in ("baseline", "comparison")}}
+        if "color_limits" in payload:
+            expected["color_limits"] = config["cross_scale"].get("color_limits", [-20, 20])
+    else:
+        expected = {
+            "inputs": {role: manifest["inputs"][role].get("sha256") for role in ("baseline", "comparison")},
+            "queries": manifest.get("queries", []), "metrics": config.get("metrics"),
+            "plots": sorted(config.get("plots", [])),
+            "labels": {role: config[role]["label"] for role in ("baseline", "comparison")},
+            "pagination": {key: config.get(key) for key in ("queries_per_page", "change_queries_per_page")},
+        }
     if any(payload.get(key) != value for key, value in expected.items()):
         return None
     return rendering
@@ -69,7 +117,8 @@ def rendering_difference(a, b):
         return "Fingerprint unavailable for one or both batches"
     names = {"inputs": "Input contents", "queries": "Query selection/order", "metrics": "Metrics/order",
              "plots": "Plot types", "labels": "Labels", "pagination": "Pagination",
-             "code": "Plotting code", "environment": "Rendering environment", "schema_version": "Fingerprint schema"}
+             "code": "Plotting code", "environment": "Rendering environment", "schema_version": "Fingerprint schema", "metric": "Metric",
+             "scaling_interval": "Scaling interval", "kind": "Comparison kind", "color_limits": "Heatmap color limits"}
     changed = [label for key, label in names.items() if a["payload"].get(key) != b["payload"].get(key)]
     return "; ".join(changed) or "Same rendering fingerprint"
 
@@ -86,8 +135,8 @@ def annotate_records(records):
         record["related"] = []
         if rendering:
             fingerprints.setdefault(rendering["sha256"], []).append(record)
-        directories = tuple(record["source_directories"][role] for role in ("baseline", "comparison"))
-        if all(directories):
+        directories = tuple(canonical_json(record["source_directories"][role]) for role in ("baseline", "comparison"))
+        if all(record["source_directories"].values()):
             source_pairs.setdefault(directories, []).append(record)
     for matching in fingerprints.values():
         latest = matching[0]
@@ -121,6 +170,10 @@ def batch_records(root):
             group_id = hashlib.sha256(canonical_json(settings).encode("utf-8")).hexdigest()
             source_directories = {}
             for role in metadata:
+                if manifest.get("kind") == "cross_scale":
+                    source_directories[role] = [str(Path(pair[role]["path"]).parent.resolve())
+                                                for pair in sorted(manifest["scale_pairs"], key=lambda item: item["scale_factor"])]
+                    continue
                 directory = config[role].get("directory")
                 if directory is None and inputs[role].get("path"):
                     directory = str(Path(inputs[role]["path"]).parent)
@@ -128,6 +181,8 @@ def batch_records(root):
             record = {
                 "uid": hashlib.sha256(str(path.parent.resolve()).encode("utf-8")).hexdigest()[:20],
                 "group_id": group_id,
+                "kind": manifest.get("kind", "pair"),
+                "scale_pairs": manifest.get("scale_pairs"),
                 "source_directories": source_directories,
                 "rendering": verified_rendering(manifest),
                 "id": manifest.get("batch_id", path.parent.name),
@@ -181,7 +236,7 @@ def write_index(root):
     root = Path(root).resolve()
     root.mkdir(parents=True, exist_ok=True)
     records = batch_records(root)
-    template = Path(__file__).with_name("benchmark_index.html").read_text(encoding="utf-8")
+    template = Path(__file__).with_name("index.html").read_text(encoding="utf-8")
     # JSON is inert script data, but closing script tags must still be escaped.
     payload = json.dumps(records, ensure_ascii=True, sort_keys=True).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     document = template.replace("__BATCH_DATA__", payload)
@@ -199,7 +254,7 @@ def write_index(root):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("root", nargs="?", type=Path, default=Path(__file__).resolve().parents[1] / "generated/benchmark-comparisons")
+    parser.add_argument("root", nargs="?", type=Path, default=Path(__file__).resolve().parents[2] / "benchmarking/plots/benchmark-comparisons")
     parser.add_argument("--migrate", action="store_true", help="flatten completed legacy batches before building the index")
     args = parser.parse_args()
     root = args.root.resolve()

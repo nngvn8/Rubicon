@@ -20,7 +20,7 @@
 <div class="group-controls"><label class="group-toggle"><input id="group-matching" type="checkbox" checked> Group matching configurations</label><button id="expand-all">Expand all</button><button id="collapse-all">Collapse all</button></div>
 <div id="count" aria-live="polite"></div><div id="status" role="status"></div>
 <div class="table-wrap"><table><thead><tr><th>Generated (UTC)</th><th>Comparison</th><th>Scale factor</th><th>Execution mode</th><th>Optimizations</th><th>Batch directory</th></tr></thead><tbody id="rows"></tbody></table></div>
-<footer>Static snapshot built from manifest.json files. Rebuild with <code>python3 scripts/benchmark_index.py</code>; plotting also rebuilds it automatically. No server or external assets required.</footer>
+<footer>Static snapshot built from manifest.json files. Rebuild with <code>python3 scripts/benchmark_plotting/index.py</code>; plotting also rebuilds it automatically. No server or external assets required.</footer>
 <script id="batch-data" type="application/json">__BATCH_DATA__</script>
 <script>
 'use strict';
@@ -121,7 +121,7 @@ function batchRow(batch,{members=null,member=false}={}){
   if(members&&members.length>1)generated.append(element('span',`Newest of ${members.length} matching batches`,'group-size'));
   const comparison=cell(tr,`${batch.labels.baseline} → ${batch.labels.comparison}`);
   const variants=element('div',undefined,'variant-settings');variants.append(settingsList(batch,'variant'));comparison.append(variants);
-  comparison.append(element('small',`${batch.queries.length} queries · ${batch.figures} figures`));
+  comparison.append(element('small',`${batch.queries.length} queries · ${batch.figures} figures${batch.kind==='cross_scale'?' · across scale factors':''}`));
   for(const key of ['scale_factor','execution_mode'])cell(tr,pairText(batch,key));
   cell(tr).append(settingsList(batch,'optimization'));
   const actions=cell(tr);actions.className='actions';
@@ -135,7 +135,7 @@ function batchRow(batch,{members=null,member=false}={}){
   const link=element('a','Manifest');link.href=batch.manifest.split('/').map(encodeURIComponent).join('/');actions.append(link);
   const badge=relatedBadge(batch);if(badge)actions.append(badge);
   const detail=element('details');detail.append(element('summary','Full input metadata'));
-  detail.append(element('pre',JSON.stringify(batch.metadata,null,2),'detail'));actions.append(detail);
+  detail.append(element('pre',JSON.stringify(batch.scale_pairs||batch.metadata,null,2),'detail'));actions.append(detail);
   const fingerprint=element('details');fingerprint.append(element('summary',batch.rendering?'Rendering fingerprint':'Rendering fingerprint not recorded (legacy batch)'));
   if(batch.rendering)fingerprint.append(element('pre',JSON.stringify(batch.rendering,null,2),'detail'));
   actions.append(fingerprint);

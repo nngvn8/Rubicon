@@ -58,7 +58,8 @@ uuid_list: List[int] = []
 
 uuid_condition = threading.Condition()
 
-complete_plans: Dict[int, WorkResponse.PlanResponse] = {}
+# Plan ID -> (terminal response, client timestamp captured after parsing).
+completed: Dict[int, Tuple[WorkResponse.PlanResponse, float]] = {}
 complete_condition = threading.Condition()
 
 # ComputeUnit uses this exact terminal PlanResponse.info value only after a
@@ -87,11 +88,12 @@ def update_uuids(message: msg.TCPMessage):
         
 
 def plan_finished_cb(message: msg.TCPMessage):
-    global complete_condition, complete_plans
+    global complete_condition, completed
     response: WorkResponse.PlanResponse = WorkResponse.PlanResponse()
     response.ParseFromString(message.payload)
+    arrived = time.perf_counter()
     with complete_condition:
-        complete_plans[response.planId] = response
+        completed[response.planId] = (response, arrived)
         complete_condition.notify_all()
 
 
@@ -109,17 +111,17 @@ def server_config_response_cb(message: msg.TCPMessage):
 # ----------------------------
 def wait_next_completion(client, plan_id, timeout=300.0):
     with complete_condition:
-        deadline = time.time() + timeout
-        while plan_id not in complete_plans and client.connection_up:
-            remaining = deadline - time.time()
+        deadline = time.monotonic() + timeout
+        while plan_id not in completed and client.connection_up:
+            remaining = deadline - time.monotonic()
             if remaining <= 0:
-                print(f"[Warn] Timeout waiting for plan_id={plan_id}")
-                return None
+                raise TimeoutError(f"Timeout waiting for plan_id={plan_id}")
             complete_condition.wait(timeout=remaining)
 
-        # Plan ids are unique for every execution. Remove the terminal response
-        # once consumed so a long benchmark does not retain every prior result.
-        return complete_plans.pop(plan_id, None)
+        # Retain the pair for round calculations; clear it at the round boundary.
+        if plan_id not in completed:
+            raise ConnectionError(f"Connection lost waiting for plan_id={plan_id}")
+        return completed[plan_id]
 
 
 def wait_for_config_reply(client: tcp_client.TCPClient) -> Optional[bool]:
@@ -196,17 +198,16 @@ def load_query_plan_from_pb(pb_file_path: str, src_uuid: int = 0, target_uuid: i
     
     return tcp_msg, qplan
 
-def run_one_query(client: tcp_client.TCPClient, query_msg: msg.TCPMessage) -> Optional[WorkResponse.PlanResponse]:
+def run_one_query(client: tcp_client.TCPClient, query_msg: msg.TCPMessage) -> Tuple[WorkResponse.PlanResponse, float]:
     """Submit a plan and return its terminal response, if one arrives."""
     req = WorkRequest.WorkRequest()
     req.ParseFromString(query_msg.payload)
     plan_id = req.queryPlan.planid
 
-    t_s = datetime.now()
+    t_s = time.perf_counter()
     client.send_message(query_msg)
-    plan_response = wait_next_completion(client, plan_id)
-    t_e = datetime.now()
-    total_response_time = (t_e - t_s).total_seconds()
+    plan_response, t_e = wait_next_completion(client, plan_id)
+    total_response_time = t_e - t_s
 
     return plan_response, total_response_time
 
@@ -240,7 +241,7 @@ def summarize(samples: List[Dict]) -> Dict[str, Dict[str, float]]:
     """Calculate summary statistics for each timing metric with observations."""
     summary: Dict[str, Dict[str, float]] = {}
     for metric in ("total_response_time", "plan_duration", "operator_work"):
-        values = [sample[metric] for sample in samples if sample[metric] is not None]
+        values = [sample[metric] for sample in samples]
         if not values:
             continue
         summary[metric] = {
@@ -308,11 +309,19 @@ def load_benchmark_config(config_path: Optional[str]) -> Dict:
         raise ValueError(f"could not read config {path}: {error}") from error
     if not isinstance(config, dict):
         raise ValueError("benchmark config must contain a YAML mapping")
-    for key in ("benchmark", "variant", "experiment", "optimization"):
+    for key in ("benchmark", "variant", "experiment", "optimization", "compilation"):
         if key in config and not isinstance(config[key], dict):
             raise ValueError(f"config field {key!r} must be a mapping")
+    for key in ("optimization_level", "log_level"):
+        if key in config.get("compilation", {}):
+            value = config["compilation"][key]
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"compilation field {key!r} must be a nonempty string")
     if "plan_source" in config and config["plan_source"] not in PLAN_SOURCES:
         raise ValueError(f"config plan_source must be one of: {', '.join(PLAN_SOURCES)}")
+    mode = config.get("benchmark", {}).get("execution_mode", "sequential")
+    if mode not in ("sequential", "concurrent"):
+        raise ValueError("benchmark execution_mode must be sequential or concurrent")
     optimization = {**DEFAULT_OPTIMIZATION, **config.get("optimization", {})}
     if optimization["mat_type"] not in ("std", "lateMat", "lateMatHybrid"):
         raise ValueError("optimization mat_type must be std, lateMat, or lateMatHybrid")
@@ -329,15 +338,19 @@ def load_benchmark_config(config_path: Optional[str]) -> Dict:
 
 
 def create_benchmark_file(
-    workers: int, scale_factor: int, runs: int, variant: Dict[str, bool | int | float | str]
+    workers: int, scale_factor: int, runs: int, variant: Dict[str, bool | int | float | str],
+    execution_mode: str,
 ) -> Path:
     """Create a unique benchmark directory without using randomized plan ids."""
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
-    run_name = f"{timestamp}_workers-{workers}_sf-{scale_factor}_runs-{runs}"
-    benchmark_dir = BENCHMARK_ROOT / variant_slug(variant) / run_name
+    if execution_mode not in ("concurrent", "sequential"):
+        raise ValueError("execution_mode must be sequential or concurrent")
+    run_name = f"{timestamp}_sf-{scale_factor}_runs-{runs}_workers-{workers}"
+    mode_dir = BENCHMARK_ROOT / variant_slug(variant) / execution_mode
+    benchmark_dir = mode_dir / run_name
     suffix = 1
     while benchmark_dir.exists():
-        benchmark_dir = BENCHMARK_ROOT / variant_slug(variant) / f"{run_name}_{suffix}"
+        benchmark_dir = mode_dir / f"{run_name}_{suffix}"
         suffix += 1
     benchmark_dir.mkdir(parents=True)
     return benchmark_dir / "results.json"
@@ -374,6 +387,11 @@ def main():
         "--config",
         default=str(DEFAULT_BENCHMARK_CONFIG),
         help="YAML benchmark configuration file (default: configs/benchmark_example.yaml).",
+    )
+    parser.add_argument(
+        "--execution-mode", choices=("sequential", "concurrent"),
+        default=benchmark_defaults.get("execution_mode", "sequential"),
+        help="Submit and wait per query, or submit the entire batch before waiting.",
     )
     parser.add_argument("-ip", default="127.0.0.1")
     parser.add_argument("-port", default=23233)
@@ -459,9 +477,12 @@ def main():
     scale_factor = args.scale_factor
     write_benchmark_results_enabled = WRITE_BENCHMARK_RESULTS or args.write_benchmark_results
     benchmark_results: Dict[str, Dict] = {}
+    round_results: List[Dict] = []
     benchmark_file: Optional[Path] = None
     if write_benchmark_results_enabled:
-        benchmark_file = create_benchmark_file(workers_per_cu, scale_factor, args.runs, variant)
+        benchmark_file = create_benchmark_file(
+            workers_per_cu, scale_factor, args.runs, variant, args.execution_mode
+        )
 
     # Configure the ComputeUnit once. This keeps discovery and configuration
     # out of every measured execution.
@@ -476,6 +497,11 @@ def main():
         for query in query_list:
             benchmark_results[Path(query).name] = {"samples": [], "failures": []}
 
+        def submit(query_msg, plan_id, submitted, send_ends):
+            submitted[plan_id] = time.perf_counter()
+            client.send_message(query_msg)
+            send_ends.append(time.perf_counter())
+
         total_rounds = args.warmup_runs + args.runs
         for round_number in range(1, total_rounds + 1):
             is_warmup = round_number <= args.warmup_runs
@@ -483,9 +509,12 @@ def main():
             label = "warmup" if is_warmup else f"measured round {measured_round}/{args.runs}"
             print(f"\n=== {label} ===")
 
-            # A round is a complete sequential pass over the selected batch.
+            with complete_condition:
+                completed.clear()
+
+            # Prepare all plans before the measured submission interval.
+            prepared = []
             for query in query_list:
-                print(query)
                 if using_pb_files:
                     query_tcp_msg, query_plan = load_query_plan_from_pb(
                         query, src_uuid=src_uuid, target_uuid=tgt_uuid,
@@ -498,21 +527,44 @@ def main():
                         scale_factor=scale_factor, extendedResult=EXTENDED_RESULT,
                     )
 
-                plan_response, total_response_time = run_one_query(client=client, query_msg=query_tcp_msg)
+                prepared.append((query, query_tcp_msg, query_plan))
+
+            # Maps plan ID to the client timestamp immediately before sending.
+            submitted = {}
+            # Maps plan ID to its saved sample dictionary (a reference, not a copy).
+            samples_by_plan = {}
+            # Client timestamps after each socket send returns; not server receipt times.
+            send_ends = []
+            # Start of this round
+            round_start = time.perf_counter()
+
+            if args.execution_mode == "concurrent":
+                for query, query_msg, plan in prepared:
+                    submit(query_msg, plan.planid, submitted, send_ends)
+
+            # Responses can arrive in any order; their arrival times are captured
+            # by the receiver, independently of the order in which we collect them.
+            for query, query_msg, query_plan in prepared:
+                print(query)
+                plan_id = query_plan.planid
+                if args.execution_mode == "sequential":
+                    submit(query_msg, plan_id, submitted, send_ends)
+                remaining = max(0.0, submitted[plan_id] + 300.0 - time.perf_counter())
+                plan_response, arrived = wait_next_completion(client, plan_id, timeout=remaining)
+                total_response_time = arrived - submitted[plan_id]
                 print(f"Total response time: {total_response_time} seconds")
 
-                plan_duration_s = None
-                operator_work_s = None
-                if plan_response is not None and plan_response.extendedResults:
-                    extended = plan_response.extendedResults
-                    plan_duration_s = (max(item.end for item in extended) - min(item.start for item in extended)) / 1_000_000_000
-                    operator_work_s = sum(item.end - item.start for item in extended) / 1_000_000_000
-                    print(f"Plan duration: {plan_duration_s} seconds")
-                    print(f"Operator work: {operator_work_s} seconds")
+                extended = plan_response.extendedResults
+                if not extended:
+                    raise RuntimeError(f"Missing operator timings for plan_id={plan_id}")
+                plan_duration_s = (max(item.end for item in extended) - min(item.start for item in extended)) / 1e9
+                operator_work_s = sum(item.end - item.start for item in extended) / 1e9
+                print(f"Plan duration: {plan_duration_s} seconds")
+                print(f"Operator work: {operator_work_s} seconds")
 
-                succeeded = plan_response is not None and plan_response.info == PLAN_SUCCESS_INFO
+                succeeded = plan_response.info == PLAN_SUCCESS_INFO
                 if not succeeded:
-                    failure = "no plan response received" if plan_response is None else plan_response.info
+                    failure = plan_response.info
                     print(f"Query {query} FAILED: {failure}")
                     if not is_warmup:
                         all_succeeded = False
@@ -525,9 +577,32 @@ def main():
                         "total_response_time": total_response_time,
                         "plan_duration": plan_duration_s,
                         "operator_work": operator_work_s,
+                        "submission_offset": submitted[plan_id] - round_start,
                     })
+                    samples_by_plan[plan_id] = benchmark_results[Path(query).name]["samples"][-1]
                     print(plan_response.info)
 
+            extended = [item for response, _ in completed.values()
+                        for item in response.extendedResults]
+            first_start = min(item.start for item in extended)
+            last_end = max(item.end for item in extended)
+            arrivals = [arrived for _, arrived in completed.values()]
+            if not is_warmup:
+                # All durations/offsets are seconds. Server offsets use the
+                # earliest operator start in this round as their origin.
+                round_results.append({
+                    "round": measured_round,
+                    "submission_span": max(send_ends) - round_start,
+                    "total_response_time": max(arrivals) - round_start,
+                    "server_round_duration": (last_end - first_start) / 1e9,
+                })
+                for query, _, plan in prepared:
+                    response, _ = completed[plan.planid]
+                    if response.info != PLAN_SUCCESS_INFO:
+                        continue
+                    sample = samples_by_plan[plan.planid]
+                    sample["server_start_offset"] = (min(i.start for i in response.extendedResults) - first_start) / 1e9
+                    sample["server_end_offset"] = (max(i.end for i in response.extendedResults) - first_start) / 1e9
         for result in benchmark_results.values():
             result["summary"] = summarize(result["samples"])
 
@@ -547,12 +622,14 @@ def main():
                 "cu_restarted_between_runs": False,
                 "plan_source": args.f if args.f else args.plan_source,
                 "query_order": [Path(query).name for query in query_list],
-                "execution_mode": "sequential",
+                "execution_mode": args.execution_mode,
                 "optimization": benchmark_config.get("optimization", dict(DEFAULT_OPTIMIZATION)),
+                "compilation": benchmark_config.get("compilation", {}),
                 "variant": variant,
                 "experiment": benchmark_config.get("experiment", {}),
                 "config_file": args.config,
             },
+            "rounds": round_results,
             "queries": benchmark_results,
         })
         print(f"Benchmark results written to {benchmark_file}")

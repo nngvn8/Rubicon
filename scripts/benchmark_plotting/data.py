@@ -89,34 +89,27 @@ def summarize(baseline: Experiment, comparison: Experiment, queries: list[str], 
 
 
 def summarize_changes(baseline, comparison, queries, metric):
-    """Describe all unpaired timing ratios; combinations are not independent samples."""
+    """Compare medians; describe each timing distribution against one fixed reference.
+
+    No round pairing or Cartesian product is used. The comparison's normalized
+    median equals the percentage change between the two timing medians. Its
+    quantiles describe timing spread, not uncertainty in that estimated change.
+    """
+    summary = summarize(baseline, comparison, queries, metric)
     rows = []
-    for query in queries:
-        a = values(baseline, query, metric).dropna()
-        b = values(comparison, query, metric).dropna()
-        row = {"query": query, "baseline_n": len(a), "comparison_n": len(b)}
-        # A zero reference makes relative improvements undefined. Do not silently
-        # remove it and change the empirical baseline distribution.
-        if len(a) and len(b) and (a > 0).all():
-            pairs = pd.DataFrame([
-                (100 * (bv / av - 1), bv - av)
-                for av in a for bv in b
-            ], columns=["percent", "delta"]).sort_values("percent", kind="stable")
-            changes = pairs["percent"]
-            row.update(dict(zip(
-                ("p05", "q1", "median", "q3", "p95"),
-                changes.quantile([.05, .25, .5, .75, .95]),
-            )))
-            # Interpolate the corresponding absolute deltas at exactly the
-            # same ranked pairs used for each percentage whisker endpoint.
-            for name, quantile in (("p05", .05), ("p95", .95)):
-                rank = (len(pairs) - 1) * quantile
-                lower, upper = math.floor(rank), math.ceil(rank)
-                weight = rank - lower
-                row[f"{name}_delta"] = ((1 - weight) * pairs.iloc[lower]["delta"]
-                                        + weight * pairs.iloc[upper]["delta"])
-        else:
-            row.update(dict.fromkeys(("p05", "q1", "median", "q3", "p95", "p05_delta", "p95_delta"), float("nan")))
+    quantiles = {"p05": .05, "q1": .25, "q3": .75, "p95": .95}
+    for query, result in summary.iterrows():
+        reference = result["baseline"]
+        row = {"query": query, "baseline_n": result["baseline_n"],
+               "comparison_n": result["comparison_n"], "median": result["percent"]}
+        for experiment, prefix in ((baseline, "baseline_"), (comparison, "")):
+            observed = values(experiment, query, metric).dropna()
+            for name, quantile in quantiles.items():
+                duration = observed.quantile(quantile) if len(observed) else float("nan")
+                available = math.isfinite(reference) and reference > 0 and math.isfinite(duration)
+                row[prefix + name] = 100 * (duration / reference - 1) if available else float("nan")
+                if not prefix and name in ("p05", "p95"):
+                    row[name + "_delta"] = duration - reference if available else float("nan")
         rows.append(row)
     return pd.DataFrame(rows).set_index("query")
 

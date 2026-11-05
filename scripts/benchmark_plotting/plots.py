@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import json
 
 import matplotlib
 matplotlib.use("Agg")
@@ -9,7 +10,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import EngFormatter, MaxNLocator, PercentFormatter
 import numpy as np
 
-from benchmark_data import METRICS, values
+from data import METRICS, values
 
 COLORS = ("tab:blue", "tab:orange")
 
@@ -87,15 +88,15 @@ def format_delta(seconds):
 
 
 def plot_change(experiments, queries, metric):
-    """One horizontal empirical time-change interval per query."""
-    from benchmark_data import summarize_changes
+    """One comparison timing interval per query, relative to the baseline median."""
+    from data import summarize_changes
 
     data = summarize_changes(*experiments, queries, metric)
     fig, ax = plt.subplots(figsize=(12, max(5, len(queries) * .48 + 2)))
     ax.axvspan(-2, 2, color="grey", alpha=.12)
     for i, (query, row) in enumerate(data.iterrows()):
         if not math.isfinite(row["median"]):
-            ax.text(0, i, "unavailable (missing data or zero baseline)", va="center", fontsize=8)
+            ax.text(0, i, "unavailable (missing data or zero baseline median)", va="center", fontsize=8)
             continue
         ax.bxp([{
             "med": row["median"], "q1": row["q1"], "q3": row["q3"],
@@ -115,19 +116,55 @@ def plot_change(experiments, queries, metric):
     ax.invert_yaxis()
     ax.axvline(0, color="black", linewidth=.8)
     ax.margins(x=.23)
-    ax.set_xlabel("Time change relative to baseline (%) · negative = faster")
+    ax.set_xlabel("Time change relative to baseline median (%) · negative = faster")
     ax.set_title(f'{METRICS[metric]["label"]}: {experiments[1].label} vs {experiments[0].label}')
     ax.grid(axis="x", alpha=.2)
-    fig.text(.5, .02, "Line/label: median · Box: middle 50% · Whiskers: 5th–95th percentiles · Shading: ±2% tolerance\n"
-             "All unpaired timing combinations; descriptive variation, not confidence intervals or absolute bounds.",
+    fig.text(.5, .02, "Line/label: percentage change between timing medians · Box: middle 50% · Whiskers: 5th–95th percentiles\n"
+             "Comparison timing spread relative to baseline median; not confidence intervals · Shading: ±2% tolerance",
              ha="center", fontsize=9)
     fig.tight_layout(rect=(0, .07, 1, 1))
     return fig
 
 
+def plot_change_ci(experiments, queries, metric, *, summary=None, resamples=10000, confidence=.95, seed=0):
+    """Separate uncertainty chart: point estimate plus bootstrap confidence interval."""
+    from bootstrap import summarize_bootstrap
+
+    if summary is None:
+        summary = summarize_bootstrap(*experiments, queries, metric,
+                                      resamples=resamples, confidence=confidence, seed=seed)
+    fig, ax = plt.subplots(figsize=(12, max(5, len(queries) * .52 + 2)))
+    ax.axvspan(-2, 2, color="grey", alpha=.12)
+    ax.axvline(0, color="black", linewidth=.8)
+    for i, (query, row) in enumerate(summary.iterrows()):
+        if math.isfinite(row["percent"]):
+            ax.plot(row["percent"], i, "o", color="tab:blue", zorder=3)
+        if row["status"] == "ok":
+            # Draw endpoints directly: percentile intervals need not contain
+            # the original point estimate, so errorbar distances can be negative.
+            ax.hlines(i, row["ci_low"], row["ci_high"], color="tab:blue", linewidth=2)
+            ax.vlines([row["ci_low"], row["ci_high"]], i-.10, i+.10, color="tab:blue")
+            label = f'{row["percent"]:+.2f}% [{row["ci_low"]:+.2f}, {row["ci_high"]:+.2f}]'
+        else:
+            label = f'CI unavailable: {row["status"].replace("_", " ")}'
+        ax.text(1.02, i, label, transform=ax.get_yaxis_transform(), va="center", fontsize=8)
+    ax.set_yticks(range(len(queries)), [f'{q.removesuffix(".pb")} (n={int(summary.loc[q, "baseline_n"])}/{int(summary.loc[q, "comparison_n"])})' for q in queries])
+    ax.invert_yaxis()
+    ax.set_xlabel("Change between timing medians (%) · negative = faster")
+    ax.set_title(f'{METRICS[metric]["label"]}: {experiments[1].label} vs {experiments[0].label}')
+    ax.grid(axis="x", alpha=.2)
+    ax.margins(x=.1)
+    fig.text(.5, .02,
+             f'Dot: observed median change · Line: {confidence:.0%} percentile-bootstrap CI · {resamples:,} resamples · Shading: ±2% tolerance\n'
+             'Exploratory: assumes independent samples; excludes between-session variation and execution-order bias',
+             ha="center", fontsize=9)
+    fig.tight_layout(rect=(0, .07, .78, 1))
+    return fig
+
+
 def plot_metric_comparison(experiments, queries, metrics):
     """Compare the same median changes as the interval charts on one shared axis."""
-    from benchmark_data import summarize_changes
+    from data import summarize_changes
 
     medians = {metric: summarize_changes(*experiments, queries, metric)["median"] for metric in metrics}
     fig, ax = plt.subplots(figsize=(12, max(5, len(queries) * .5 + 2)))
@@ -147,13 +184,13 @@ def plot_metric_comparison(experiments, queries, metrics):
     ax.set_yticks(range(len(queries)), [query.removesuffix(".pb") for query in queries])
     ax.invert_yaxis()
     ax.axvline(0, color="black", linewidth=.8)
-    ax.set_xlabel("Median change relative to baseline (%) · negative = lower / faster")
+    ax.set_xlabel("Change between timing medians (%) · negative = lower / faster")
     ax.set_title(f'Metric comparison: {experiments[1].label} vs {experiments[0].label}')
     ax.grid(axis="x", alpha=.2)
     ax.grid(axis="y", alpha=.1)
     ax.margins(x=.15)
     ax.legend(loc="upper center", bbox_to_anchor=(.5, -.09), ncol=len(metrics), fontsize=9)
-    fig.text(.5, .02, "Dots: median of unpaired percentage changes · Lines: span between metrics · Shading: ±2% tolerance", ha="center", fontsize=9)
+    fig.text(.5, .02, "Dots: percentage changes between timing medians · Lines: span between metrics · Shading: ±2% tolerance", ha="center", fontsize=9)
     fig.tight_layout(rect=(0, .06, 1, 1))
     return fig
 
@@ -229,7 +266,7 @@ def plot_metric_relationships(experiments, queries, metrics):
 
 def plot_duration_exceedance(experiments, queries, metrics=None):
     """One count bar per query and experiment, annotated with relative frequency."""
-    from benchmark_data import duration_exceedance_counts
+    from data import duration_exceedance_counts
     from matplotlib.ticker import MultipleLocator
 
     summaries = [duration_exceedance_counts(experiment, queries) for experiment in experiments]
@@ -251,4 +288,122 @@ def plot_duration_exceedance(experiments, queries, metrics=None):
     fig.suptitle("Rounds where plan duration exceeds operator work")
     fig.text(.5, .025, "Strict comparison within each round · Labels: count / rounds with both metrics (relative frequency) · No 2% tolerance applied", ha="center", fontsize=9)
     fig.tight_layout(rect=(0, .06, 1, .96))
+    return fig
+
+
+def configuration_caption(config, experiments, batch_id):
+    """Use recorded metadata only; paths and verbose provenance stay in the manifest."""
+    lines = [f"Batch: {batch_id} | Configuration from input metadata; full details: manifest.json"]
+    provenance = {"created_at", "query_order", "config_file", "experiment"}
+    for role, experiment in zip(("baseline", "comparison"), experiments):
+        metadata = experiment.metadata
+        settings = {key: value for key, value in metadata.items() if key not in provenance}
+        # Preserve structured experiment settings while keeping prose notes in
+        # the manifest instead of filling the figure with paragraphs.
+        if "experiment" in metadata:
+            experiment_settings = metadata["experiment"]
+            if isinstance(experiment_settings, dict):
+                experiment_settings = {k: v for k, v in experiment_settings.items() if k not in ("notes", "reason")}
+            if experiment_settings:
+                settings["experiment"] = experiment_settings
+        encoded = "; ".join(f"{key}={json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(',', ':'))}"
+                            for key, value in sorted(settings.items()))
+        lines.append(f"{role.capitalize()} ({experiment.label}): {encoded}")
+        lines.append(f"Input: {config[role]['directory'].name}")
+    return lines
+
+def add_configuration_caption(figure, lines):
+    """Extend the figure below its existing layout without covering plot content."""
+    import textwrap
+
+    width, height = figure.get_size_inches()
+    wrapped = [part for line in lines for part in textwrap.wrap(line, width=max(40, int(width * 17)), break_long_words=True)]
+    footer_height = .25 + .13 * len(wrapped)
+    total_height = height + footer_height
+    factor, offset = height / total_height, footer_height / total_height
+    # Figure-level legends need their anchors captured before the resize.
+    legend_boxes = [(legend, legend.get_bbox_to_anchor().transformed(figure.transFigure.inverted()))
+                    for legend in figure.legends]
+    figure.set_size_inches(width, total_height)
+    for axis in figure.axes:
+        x, y, w, h = axis.get_position().bounds
+        axis.set_position((x, offset + factor * y, w, factor * h))
+    for text in figure.texts:
+        x, y = text.get_position()
+        text.set_position((x, offset + factor * y))
+    for legend, box in legend_boxes:
+        legend.set_bbox_to_anchor((box.x0, offset + factor * box.y0, box.width, factor * box.height), transform=figure.transFigure)
+    figure.text(.015, .08 / total_height, "\n".join(wrapped), ha="left", va="bottom", fontsize=7, family="monospace", linespacing=1.25)
+
+
+
+def plot_cross_scale(pairs, queries, metric, scaling_interval, color_limits=(-20, 20)):
+    """Changes between medians at each scale, alongside scaling ratios of medians."""
+    from data import summarize_changes
+    from matplotlib.colors import TwoSlopeNorm
+
+    scales = sorted(pairs)
+    heat = np.array([summarize_changes(*pairs[sf], queries, metric)["median"].to_numpy()
+                     for sf in scales]).T
+    lower, upper = color_limits
+    height = max(5, .48 * len(queries) + 2)
+    fig, (left, right) = plt.subplots(1, 2, figsize=(14, height),
+                                     gridspec_kw={"width_ratios": [max(1, len(scales) / 3), 1.2]})
+    cmap = plt.get_cmap("RdBu_r").copy()
+    cmap.set_bad("#eeeeee")
+    heatmap = left.imshow(np.ma.masked_invalid(heat), aspect="auto", cmap=cmap,
+                          norm=TwoSlopeNorm(vmin=lower, vcenter=0, vmax=upper))
+    colorbar = fig.colorbar(heatmap, ax=left, fraction=.035, pad=.025, extend="both")
+    colorbar.set_label("Change (%) · colors clipped at limits")
+    left.set_xticks(range(len(scales)), [f"SF {sf:g}" for sf in scales])
+    labels = [q.removesuffix(".pb") for q in queries]
+    left.set_yticks(range(len(queries)), labels)
+    for row in range(len(queries)):
+        for column in range(len(scales)):
+            value = heat[row, column]
+            text = f"{value:+.1f}%" if np.isfinite(value) else "N/A"
+            left.text(column, row, text, ha="center", va="center",
+                      color="white" if np.isfinite(value) and (value > .6 * upper or value < .6 * lower) else "#17212b")
+    left.set_title("Effect of merging" if [e.label.lower() for e in pairs[scales[0]]] == ["unmerged", "merged"]
+                   else f"{pairs[scales[0]][1].label} vs {pairs[scales[0]][0].label}")
+    left.set_xlabel("Percentage change between timing medians\nNegative (blue) = lower; positive (red) = higher")
+
+    low, high = scaling_interval
+    expected = high / low
+    positions = np.arange(len(queries))
+    plotted = [expected]
+    for i, offset in enumerate((-.13, .13)):
+        ratios = []
+        for row, query in enumerate(queries):
+            before = values(pairs[low][i], query, metric).dropna().median()
+            after = values(pairs[high][i], query, metric).dropna().median()
+            ratio = after / before if math.isfinite(before) and before > 0 and math.isfinite(after) else np.nan
+            ratios.append(ratio)
+            if math.isfinite(ratio):
+                right.annotate(f"{ratio:.2f}×", (ratio, row + offset), xytext=(6, 0),
+                               textcoords="offset points", va="center", fontsize=8, color=COLORS[i])
+            else:
+                right.text(.99, row + offset, f"{pairs[low][i].label}: N/A", transform=right.get_yaxis_transform(),
+                           ha="right", va="center", fontsize=8, color=COLORS[i])
+        right.scatter(ratios, positions + offset, color=COLORS[i], label=pairs[low][i].label, s=40)
+        plotted.extend(value for value in ratios if math.isfinite(value))
+    right.axvline(expected, color="#555555", linestyle="--", linewidth=1.2,
+                  label=f"Linear scaling ({expected:g}×)")
+    span = max(max(plotted) - min(plotted), .1 * max(plotted), .1)
+    right.set_xlim(min(plotted) - .12 * span, max(plotted) + .4 * span)
+    right.set_yticks(positions, labels)
+    right.set_ylim(len(queries) - .5, -.5)
+    right.set_title(f"Scaling from SF {low:g} to SF {high:g}")
+    right.set_xlabel(f"Median {METRICS[metric]['label'].lower()}: SF {high:g} / SF {low:g}\n"
+                     "Further right = larger runtime multiplier")
+    right.grid(axis="x", alpha=.2)
+    # Keep legends outside the query rows, including for extreme scaling values.
+    right.legend(loc="lower center", bbox_to_anchor=(.5, 1.07), ncol=3, fontsize=8)
+    first = pairs[scales[0]][0].metadata
+    mode = first.get("execution_mode", "execution mode not recorded")
+    fig.suptitle(f"{METRICS[metric]['label']} across scale factors · {mode} · "
+                 f"{first['workers_per_cu']} workers")
+    fig.text(.5, .015, "Left: percentage changes between medians · "
+             "Right: ratios of medians · N/A: missing data or zero denominator", ha="center", fontsize=9)
+    fig.tight_layout(rect=(0, .055, 1, .90))
     return fig

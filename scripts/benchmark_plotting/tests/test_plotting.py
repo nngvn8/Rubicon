@@ -3,8 +3,10 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from benchmark_data import check_comparison, load_experiment, summarize, summarize_changes, values
+from data import check_comparison, load_experiment, summarize, summarize_changes, values
 from plot_benchmarks import read_config
 
 
@@ -33,21 +35,41 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(row["comparison_n"], 2)
         self.assertTrue(values(comparison, "q1.pb", "plan_duration").isna().all())
 
-    def test_unpaired_change_quantiles(self):
+    def test_changes_compare_medians_and_keep_timing_spread_separate(self):
         baseline = self.load([{"round": 1, "total_response_time": 2}, {"round": 2, "total_response_time": 4}], label="a")
         comparison = self.load([{"round": 1, "total_response_time": 1}, {"round": 2, "total_response_time": 6}], label="b")
         row = summarize_changes(baseline, comparison, ["q1.pb"], "total_response_time").iloc[0]
-        # All four changes: -75, -50, 50, 200; no round pairing.
-        for key, expected in {"p05": -71.25, "q1": -56.25, "median": 0, "q3": 87.5, "p95": 177.5}.items():
-            self.assertAlmostEqual(row[key], expected)
-        self.assertAlmostEqual(row["p05_delta"], -2.7)
-        self.assertAlmostEqual(row["p95_delta"], 3.7)
+        # Median baseline = 3, comparison = 3.5. The former all-pairs median was 0%.
+        expected = {"p05": -58.3333333333, "q1": -25, "median": 16.6666666667,
+                    "q3": 58.3333333333, "p95": 91.6666666667,
+                    "baseline_p05": -30, "baseline_q1": -16.6666666667,
+                    "baseline_q3": 16.6666666667, "baseline_p95": 30}
+        for key, value in expected.items():
+            self.assertAlmostEqual(row[key], value)
+        self.assertAlmostEqual(row["p05_delta"], -1.75)
+        self.assertAlmostEqual(row["p95_delta"], 2.75)
         self.assertEqual(row["baseline_n"], 2)
         missing = summarize_changes(baseline, comparison, ["q1.pb"], "plan_duration")
         self.assertTrue(missing[["p05", "median", "p95"]].isna().all().all())
+
+    def test_zero_observation_is_valid_when_baseline_median_is_positive(self):
+        comparison = self.load([{"round": 1, "total_response_time": 1}], label="b")
         baseline = self.load([{"round": 1, "total_response_time": 0}, {"round": 2, "total_response_time": 2}], label="a")
+        result = summarize_changes(baseline, comparison, ["q1.pb"], "total_response_time")
+        self.assertAlmostEqual(result.loc["q1.pb", "median"], 0)
+        baseline = self.load([{"round": 1, "total_response_time": 0}], label="a")
         zero = summarize_changes(baseline, comparison, ["q1.pb"], "total_response_time")
         self.assertTrue(zero[["p05", "median", "p95"]].isna().all().all())
+
+    def test_change_chart_labels_ratio_with_one_comparison_box(self):
+        from plots import plot_change
+        import matplotlib.pyplot as plt
+        baseline = self.load([{"round": 1, "total_response_time": 2}, {"round": 2, "total_response_time": 4}], label="a")
+        comparison = self.load([{"round": 1, "total_response_time": 1}, {"round": 2, "total_response_time": 6}], label="b")
+        figure = plot_change((baseline, comparison), ["q1.pb"], "total_response_time")
+        self.addCleanup(plt.close, figure)
+        self.assertTrue(any(text.get_text() == "+16.67%" for text in figure.axes[0].texts))
+        self.assertEqual(len(figure.axes[0].patches), 2)  # one comparison box and the tolerance band
 
     def test_failure_leaves_round_gap(self):
         experiment = self.load([{"round": 1, "total_response_time": 2}, {"round": 3, "total_response_time": 4}], [{"round": 2, "error": "failed"}])
@@ -84,8 +106,8 @@ class BenchmarkTests(unittest.TestCase):
         self.assertTrue(summarize(baseline, comparison, ["q1.pb"], "total_response_time")["percent"].isna().all())
 
     def test_all_rounds_share_baseline_reference(self):
-        from benchmark_figures import plot_panels
-        from benchmark_data import METRICS
+        from plots import plot_panels
+        from data import METRICS
         import matplotlib.pyplot as plt
         import numpy as np
         for metric in METRICS:
@@ -101,8 +123,8 @@ class BenchmarkTests(unittest.TestCase):
                 self.assertIn("median: 100.000 s", figure.axes[0].get_title())
 
     def test_combined_chart_uses_change_medians(self):
-        from benchmark_figures import plot_metric_comparison
-        from benchmark_data import METRICS
+        from plots import plot_metric_comparison
+        from data import METRICS
         import matplotlib.pyplot as plt
         baseline = self.load([{"round": 1, **dict.fromkeys(METRICS, 100)}], label="a")
         comparison = self.load([{"round": 1, "total_response_time": 101, "plan_duration": 99, "operator_work": 95}], label="b")
@@ -114,9 +136,18 @@ class BenchmarkTests(unittest.TestCase):
         for collection, expected in zip(ax.collections[1:], [1, -1, -5]):
             self.assertAlmostEqual(collection.get_offsets()[0, 0], expected)
 
+    def test_combined_markers_use_ratio_of_medians_for_asymmetric_timings(self):
+        from plots import plot_metric_comparison
+        import matplotlib.pyplot as plt
+        baseline = self.load([{"round": 1, "total_response_time": 2}, {"round": 2, "total_response_time": 4}], label="a")
+        comparison = self.load([{"round": 1, "total_response_time": 1}, {"round": 2, "total_response_time": 6}], label="b")
+        figure = plot_metric_comparison((baseline, comparison), ["q1.pb"], ["total_response_time"])
+        self.addCleanup(plt.close, figure)
+        self.assertAlmostEqual(figure.axes[0].collections[-1].get_offsets()[0, 0], 100 * (3.5 / 3 - 1))
+
     def test_metric_relationships_use_each_experiments_medians(self):
-        from benchmark_figures import plot_metric_relationships
-        from benchmark_data import METRICS
+        from plots import plot_metric_relationships
+        from data import METRICS
         import matplotlib.pyplot as plt
         baseline = self.load([{"round": 1, "total_response_time": 110, "plan_duration": 100, "operator_work": 95}], label="a")
         comparison = self.load([{"round": 1, "total_response_time": 210, "plan_duration": 200, "operator_work": 220}], label="b")
@@ -128,7 +159,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(figure.axes[0].get_xlim(), figure.axes[1].get_xlim())
 
     def test_relationship_duration_labels_share_units(self):
-        from benchmark_figures import duration_label_scale, format_duration_label
+        from plots import duration_label_scale, format_duration_label
         scale, unit = duration_label_scale([.219388, .480053, 3.258243])
         self.assertEqual((scale, unit), (1, "s"))
         self.assertEqual(format_duration_label(.480053, scale, unit), "0.480 s")
@@ -136,7 +167,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(duration_label_scale([.0002, .0008]), (1e-3, "ms"))
 
     def test_duration_exceedance_counts_same_round_and_complete_metrics(self):
-        from benchmark_data import duration_exceedance_counts
+        from data import duration_exceedance_counts
         experiment = self.load([
             {"round": 1, "plan_duration": 1.001, "operator_work": 1},
             {"round": 2, "plan_duration": 2, "operator_work": 2},
@@ -150,7 +181,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertTrue(duration_exceedance_counts(empty, ["q1.pb"])["percent"].isna().all())
 
     def test_duration_delta_format(self):
-        from benchmark_figures import format_delta
+        from plots import format_delta
         for seconds, expected in [(0.03, "+30.0 ms"), (-.005, "-5.00 ms"),
                                   (.000123, "+123 µs"), (1.234, "+1.23 s"),
                                   (.99999, "+1.00 s"), (0, "0 s")]:
@@ -179,7 +210,8 @@ class BatchOutputTests(unittest.TestCase):
         self.root = Path(self.temp.name)
 
     def test_compact_names_and_overrides(self):
-        from benchmark_output import compact_variant, comparison_parent, comparison_name
+        from index import compact_variant
+        from plot_benchmarks import comparison_parent, comparison_name
         from types import SimpleNamespace
         directory = self.root / "legacy-variant" / "execution"
         self.assertEqual(compact_variant({"variant": {"materialize_into_join": False}}, directory), "baseline")
@@ -195,7 +227,7 @@ class BatchOutputTests(unittest.TestCase):
         self.assertEqual(comparison_name(config, experiments), "trial")
 
     def test_collision_and_concurrent_reservations_preserve_batches(self):
-        from benchmark_output import output_batch
+        from plot_benchmarks import output_batch
         with output_batch(self.root, "2026-10-30T12-00-00Z") as (staging, first):
             self.assertFalse(first.exists())
             (staging / "figure.png").write_bytes(b"first")
@@ -209,7 +241,7 @@ class BatchOutputTests(unittest.TestCase):
         self.assertEqual(third.name, "2026-10-30T12-00-00Z_02")
 
     def test_published_batch_inherits_parent_permissions(self):
-        from benchmark_output import output_batch
+        from plot_benchmarks import output_batch
         import stat
         self.root.chmod(0o775)
         with output_batch(self.root, "2026-10-30T12-00-00Z") as (staging, final):
@@ -217,7 +249,7 @@ class BatchOutputTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(final.stat().st_mode), 0o775)
 
     def test_failed_batch_is_not_published(self):
-        from benchmark_output import output_batch
+        from plot_benchmarks import output_batch
         with self.assertRaisesRegex(RuntimeError, "render failure"):
             with output_batch(self.root, "2026-10-30T12-00-00Z") as (staging, final):
                 (staging / "partial.png").write_bytes(b"partial")
@@ -226,7 +258,7 @@ class BatchOutputTests(unittest.TestCase):
         self.assertEqual(list(self.root.iterdir()), [])
 
     def test_manifest_fingerprints_and_input_changes(self):
-        from benchmark_output import input_fingerprints, write_manifest
+        from plot_benchmarks import input_fingerprints, write_manifest
         from types import SimpleNamespace
         config = {"output_dir": self.root}
         experiments = []
@@ -250,7 +282,7 @@ class BatchOutputTests(unittest.TestCase):
             write_manifest(output, config, experiments, fingerprints, ["q1.pb"], [])
 
     def test_configuration_caption_preserves_recorded_settings(self):
-        from benchmark_output import configuration_caption, add_configuration_caption
+        from plots import configuration_caption, add_configuration_caption
         from types import SimpleNamespace
         import matplotlib.pyplot as plt
         metadata = {"variant": {"materialize_into_join": True}, "optimization": {"gco": False},
@@ -273,7 +305,7 @@ class BatchOutputTests(unittest.TestCase):
         self.assertGreater(axis.get_position().y0, .11)
 
     def test_name_overrides_cannot_escape_output(self):
-        from benchmark_output import validate_name
+        from plot_benchmarks import validate_name
         for name in ("../escape", "/absolute", "..", "a/b", "a__vs__b"):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 validate_name(name, "name")
@@ -300,7 +332,7 @@ class IndexTests(unittest.TestCase):
         return manifest
 
     def test_index_uses_metadata_and_embeds_json_safely(self):
-        from benchmark_index import write_index, batch_records
+        from index import write_index, batch_records
         directory = self.root / "batches" / "batch"
         manifest = self.make_batch(directory)
         manifest["config"]["baseline"]["label"] = "</script><script>alert(1)</script>"
@@ -316,7 +348,7 @@ class IndexTests(unittest.TestCase):
         self.assertNotIn("__BATCH_DATA__", html)
 
     def test_migration_preserves_images_manifests_and_handles_collisions(self):
-        from benchmark_index import migrate_batches, batch_records
+        from index import migrate_batches, batch_records
         first = self.root / "old-comparison" / "w48_sf2" / "2026-10-30T12-00-00Z"
         manifest = self.make_batch(first)
         second = self.root / "another-comparison" / "w48_sf2" / first.name
@@ -331,7 +363,7 @@ class IndexTests(unittest.TestCase):
         self.assertEqual(migrate_batches(self.root), [])
 
     def test_staging_directories_are_not_indexed(self):
-        from benchmark_index import batch_records, write_index
+        from index import batch_records, write_index
         self.make_batch(self.root / "batches" / ".plotting-partial")
         self.assertEqual(batch_records(self.root), [])
         self.assertTrue(write_index(self.root).is_file())
@@ -348,10 +380,10 @@ class RenderingFingerprintTests(unittest.TestCase):
         }
         self.inputs = {"baseline": {"sha256": "a" * 64}, "comparison": {"sha256": "b" * 64}}
         self.environment = {"python": "test", "matplotlib": "test", "backend": "Agg"}
-        self.code = {"benchmark_figures.py": "c" * 64}
+        self.code = {"plots.py": "c" * 64}
 
     def fingerprint(self, config=None, inputs=None, queries=None, **kwargs):
-        from benchmark_output import rendering_fingerprint
+        from plot_benchmarks import rendering_fingerprint
         return rendering_fingerprint(config or self.config, inputs or self.inputs,
                                      ["q1.pb", "q2.pb"] if queries is None else queries,
                                      environment=kwargs.get("environment", self.environment),
@@ -381,14 +413,14 @@ class RenderingFingerprintTests(unittest.TestCase):
         variants.extend([self.fingerprint(config), self.fingerprint(queries=["q2.pb", "q1.pb"]),
                          self.fingerprint(queries=["q1.pb"]),
                          self.fingerprint(environment={"python": "different"}),
-                         self.fingerprint(code_hashes={"benchmark_figures.py": "changed"}),
+                         self.fingerprint(code_hashes={"plots.py": "changed"}),
                          self.fingerprint(inputs={"baseline": self.inputs["comparison"], "comparison": self.inputs["baseline"]})])
         for result in variants:
             self.assertNotEqual(original["sha256"], result["sha256"])
 
     def test_schema_and_payload_are_verifiable(self):
         import hashlib
-        from benchmark_output import canonical_json
+        from index import canonical_json
         result = self.fingerprint()
         self.assertEqual(result["payload"]["schema_version"], 1)
         self.assertEqual(result["sha256"], hashlib.sha256(canonical_json(result["payload"]).encode()).hexdigest())
@@ -396,7 +428,7 @@ class RenderingFingerprintTests(unittest.TestCase):
     def test_newest_duplicate_is_retained_and_legacy_is_unverified(self):
         import tempfile
         from pathlib import Path
-        from benchmark_index import batch_records
+        from index import batch_records
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             for index in range(3):
@@ -426,8 +458,8 @@ class RenderingFingerprintTests(unittest.TestCase):
             self.assertIsNone(batch_records(root)[1]["rendering"])
 
     def test_grouping_keeps_execution_differences_and_unknown_settings(self):
-        from benchmark_index import configuration_metadata
-        from benchmark_output import canonical_json
+        from index import configuration_metadata
+        from index import canonical_json
         original = {"query_order": ["q1", "q2"], "host": "a", "execution_mode": "sequential",
                     "experiment": {"setting": 1, "reason": "ignored"}}
         grouped = configuration_metadata(original)
@@ -435,6 +467,23 @@ class RenderingFingerprintTests(unittest.TestCase):
         for key, value in (("host", "b"), ("query_order", ["q2", "q1"]),
                            ("execution_mode", "parallel"), ("new_setting", False)):
             self.assertNotEqual(canonical_json(grouped), canonical_json(configuration_metadata({**original, key: value})))
+
+
+class OutputPathTests(unittest.TestCase):
+    def test_config_outside_script_directory_uses_repository_output(self):
+        from plot_benchmarks import OUTPUT_ROOT
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "config.json"
+            config = {"baseline": {"directory": "a", "label": "A"},
+                      "comparison": {"directory": "b", "label": "B"}}
+            path.write_text(json.dumps(config))
+            loaded = read_config(path)
+            self.assertEqual(loaded["output_dir"], OUTPUT_ROOT)
+            self.assertEqual(loaded["baseline"]["directory"], path.parent / "a")
+            config["output_dir"] = "elsewhere"
+            path.write_text(json.dumps(config))
+            with self.assertRaisesRegex(ValueError, "output_dir must be"):
+                read_config(path)
 
 
 if __name__ == "__main__":

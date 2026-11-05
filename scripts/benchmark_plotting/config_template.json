@@ -1,0 +1,52 @@
+{
+  "baseline": {
+    "directory": "../../benchmarking/data/materialize_into_join=false/sequential/2026-11-01T02-03-55Z_sf-100_runs-20_workers-48",
+    "label": "Unmerged"
+  },
+  "comparison": {
+    "directory": "../../benchmarking/data/materialize_into_join=true/sequential/2026-11-01T13-45-53Z_sf-100_runs-20_workers-48",
+    "label": "Merged"
+  },
+  "metrics": [
+    "total_response_time",
+    "plan_duration",
+    "operator_work"
+  ],
+  "queries": null,
+  "plots": [
+    "change",
+    "rounds",
+    "metric_comparison",
+    "metric_relationships",
+    "duration_exceedance",
+    "cross_scale"
+  ],
+  "queries_per_page": 6,
+  "output_dir": "../../benchmarking/plots/benchmark-comparisons",
+  "change_queries_per_page": 13,
+  "cross_scale": {
+    "metric": "total_response_time",
+    "scaling_interval": [
+      50,
+      100
+    ],
+    "pairs": [
+      {
+        "baseline": "../../benchmarking/data/materialize_into_join=false/sequential/2026-11-01T01-03-00Z_sf-2_runs-20_workers-48",
+        "comparison": "../../benchmarking/data/materialize_into_join=true/sequential/2026-11-01T12-46-06Z_sf-2_runs-20_workers-48"
+      },
+      {
+        "baseline": "../../benchmarking/data/materialize_into_join=false/sequential/2026-11-01T01-05-07Z_sf-50_runs-20_workers-48",
+        "comparison": "../../benchmarking/data/materialize_into_join=true/sequential/2026-11-01T12-48-15Z_sf-50_runs-20_workers-48"
+      },
+      {
+        "baseline": "../../benchmarking/data/materialize_into_join=false/sequential/2026-11-01T02-03-55Z_sf-100_runs-20_workers-48",
+        "comparison": "../../benchmarking/data/materialize_into_join=true/sequential/2026-11-01T13-45-53Z_sf-100_runs-20_workers-48"
+      }
+    ],
+    "color_limits": [
+      -20,
+      20
+    ]
+  }
+}

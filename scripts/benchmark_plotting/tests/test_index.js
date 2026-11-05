@@ -1,4 +1,4 @@
-// Dependency-free interaction checks. Run with node scripts/test_benchmark_index.js.
+// Dependency-free interaction checks. Run with node scripts/benchmark_plotting/tests/test_index.js.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
@@ -31,7 +31,7 @@ let copied;
 const storage=new Map();
 function find(root,id){if(root.id===id)return root;for(const child of root.children){const result=find(child,id);if(result)return result;}return null;}
 const context=vm.createContext({document:{getElementById:id=>elements[id]||find(elements.rows,id),createElement:tag=>new Element(tag),querySelectorAll:()=>radios},navigator:{clipboard:{writeText:async text=>{copied=text;}}},window:{isSecureContext:true,location:{hash:''}},setTimeout:fn=>fn(),localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)},console});
-const html=fs.readFileSync(path.join(__dirname,'benchmark_index.html'),'utf8');
+const html=fs.readFileSync(path.join(__dirname,'..','index.html'),'utf8');
 vm.runInContext(html.split('<script>')[1].split('</script>')[0],context);
 assert.equal(elements.count.textContent,'3 of 3 batches · 2 configurations');
 assert.equal(elements.rows.children.length,2);
@@ -88,5 +88,17 @@ button.events.click();
 setImmediate(()=>{
   assert.equal(copied,"code -n '/remote/a'\\''s batch'");
   assert.match(elements.status.textContent,/Command copied/);
-  console.log('Index interactions passed: grouping, chronology, expand/collapse, filters, linked renderings, editor preference and copy');
+  // Cross-scale records retain list-valued scale factors and all six input metadata objects.
+  const cross=batch('cross',[2,50,100],{materialize_into_join:false},{gco:false});
+  cross.kind='cross_scale';cross.figures=1;
+  cross.scale_pairs=[{scale_factor:2,baseline:{metadata:{scale_factor:2}},comparison:{metadata:{scale_factor:2}}}];
+  context.crossFixture=cross;
+  vm.runInContext('batches.push(crossFixture);render()',context);
+  const crossRow=find(elements.rows,'batch-cross');
+  assert.ok(crossRow);
+  assert.match(crossRow.children[1].children[1].textContent,/across scale factors/);
+  assert.equal(crossRow.children[2].textContent,'[2,50,100]');
+  const details=crossRow.children[5].children.find(child=>child.tag==='details'&&child.children[0].textContent==='Full input metadata');
+  assert.deepEqual(JSON.parse(details.children[1].textContent),cross.scale_pairs);
+  console.log('Index interactions passed: grouping, chronology, expand/collapse, filters, linked renderings, editor preference, copy and cross-scale metadata');
 });

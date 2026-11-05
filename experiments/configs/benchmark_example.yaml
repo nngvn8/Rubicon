@@ -3,24 +3,30 @@
 plan_source: pb_plans
 
 benchmark:
+  execution_mode: concurrent  # sequential or concurrent
   runs: 20
   warmup_runs: 0
   workers_per_cu: 48
-  scale_factor: 2
+  scale_factor: 100
+
+# Describe the actual ComputeUnit build; these values do not change compilation.
+compilation:
+  optimization_level: -O3
+  log_level: LOG_INFO
 
 # Describe the settings used to generate the prebuilt plans.
 # This metadata does not enable or disable optimizations in the runner.
 optimization:
-  mat_type: lateMatHybrid  # std, lateMat, or lateMatHybrid
+  mat_type: lateMat  # std, lateMat, or lateMatHybrid
   gco: false
   merge_sort: true
   semi_joins: false
-  materialize_into_join: false
+  materialize_into_join: true
 
 # Additional experiment variant metadata.
 variant:
-  materialize_into_join: false
+  materialize_into_join: true
 
 experiment:
-  reason: "Test late-no-gco plans without materialization merged into joins"
+  reason: "Test late-no-gco plans with materialization merged into joins"
   notes: "Add machine, data, or revision notes here."

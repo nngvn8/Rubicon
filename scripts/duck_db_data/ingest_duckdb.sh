@@ -6,14 +6,14 @@ set -e
 # Minimal bash script that ingests the SSB data into DuckDB using a CLI command.
 #
 # Usage:
-#   ./scripts/ingest_duckdb.sh [SOURCE_DUCKDB_FILE] [TARGET_DB_FILE]
+#   ./scripts/duck_db_data/ingest_duckdb.sh [SOURCE_DUCKDB_FILE] [TARGET_DB_FILE]
 # Defaults:
 #   SOURCE_DUCKDB_FILE: data/binary/sf2/sf2.duckdb
 #   TARGET_DB_FILE:     DuckDB/sf2.duckdb
 # ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 SOURCE_DB="${1:-$ROOT_DIR/data/binary/sf2/sf2.duckdb}"
 TARGET_DB="${2:-$ROOT_DIR/DuckDB/sf2.duckdb}"

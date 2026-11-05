@@ -6,14 +6,14 @@ set -e
 # Translates existing columnar binary SSB data in data/binary/sf2 into a .duckdb file.
 #
 # Usage:
-#   ./scripts/generate_duckdb.sh [INPUT_DIR] [OUTPUT_FILE]
+#   ./scripts/duck_db_data/generate_duckdb.sh [INPUT_DIR] [OUTPUT_FILE]
 # Defaults:
 #   INPUT_DIR:   data/binary/sf2
 #   OUTPUT_FILE: data/binary/sf2/sf2.duckdb
 # ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 INPUT_DIR="${1:-$ROOT_DIR/data/binary/sf2}"
 OUTPUT_FILE="${2:-$ROOT_DIR/data/binary/sf2/sf2.duckdb}"
