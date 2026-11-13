@@ -13,3 +13,5 @@ data/plans
 data/pb_plans
 generated
 benchmarking
+# Local query-test logs and artifacts.
+/testing/
