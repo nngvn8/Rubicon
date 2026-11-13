@@ -16,8 +16,8 @@ PLANS_DIR="${RUBICON_ROOT}/data/plans"         # Staging dir filled by --q
 EXPERIMENTS_DIR="${RUBICON_ROOT}/experiments"  # Location of run_query.py
 
 # External launchers for the two background services.
-GRP_SCRIPT="${HOME}/start_rubi_grp.sh"
-CU_SCRIPT="${HOME}/start_rubi_cu.sh"
+GRP_SCRIPT="${GRP_SCRIPT:-${HOME}/start_rubi_grp.sh}"   # Overridable via environment
+CU_SCRIPT="${CU_SCRIPT:-${HOME}/start_rubi_cu.sh}"
 
 # --- Option defaults (overridden by the argument parser) ---------------------
 
@@ -321,6 +321,15 @@ record_query_results() {
     done
 }
 
+# Dump all CU thread backtraces to $1 (hang vs spin vs crash); no-op without gdb or a live CU.
+capture_cu_diagnostics() {
+    local out="$1" pid
+    pid="$(pgrep -u "$USER" -f 'build/bin/computeUnit' | head -n 1)"
+    if [[ -z "$pid" ]]; then echo "CU not running (crashed or exited)" > "$out"; return 0; fi
+    command -v gdb >/dev/null || return 0
+    gdb -p "$pid" -batch -ex 'set pagination off' -ex 'thread apply all bt' > "$out" 2>&1 || true
+}
+
 # Run run_query.py on one source (directory or .pb file) and record the outcome.
 # Args: source, expected plan count, log label. Reads globals IS_WARMUP, VERBOSE.
 run_selection() {
@@ -352,6 +361,7 @@ run_selection() {
         FAILED_PLANS+=("$label")
         echo "[FAILED] $label (exit $status; $completed/$expected completed); see $output"
         tail -n 10 "$output"
+        capture_cu_diagnostics "$LOG_DIR/${label}.cu-stacks.txt"
     fi
     if [[ "$VERBOSE" == true ]]; then cat "$output"; fi
 }
