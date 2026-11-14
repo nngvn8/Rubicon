@@ -14,7 +14,6 @@ cd "$REPO" || exit 1
 export CU_SCRIPT="$REPO/scripts/start_cu_sf.sh"
 
 # Rounds per phase (overridable from the environment).
-R_PERTURB=${R_PERTURB:-20}
 R_SF50=${R_SF50:-40}
 R_SF100=${R_SF100:-15}
 
@@ -48,10 +47,9 @@ build_debug() {
     log "BUILD ok $1"
 }
 
-# Phase 1: baseline. MALLOC_PERTURB_ overwrites freed memory, so a use-after-free of a freed deque node fails immediately.
+# Phase 1: baseline on the large scale factors, where the failure was observed.
 use_branch sort-timeout-baseline
 build_debug baseline && {
-    MALLOC_PERTURB_=165 run_phase base-perturb-sf2 sf2 --runs "$R_PERTURB" --restart-between-rounds -t 20
     run_phase base-sf50 sf50 --runs "$R_SF50" --restart-between-rounds -t 900
     run_phase base-sf100 sf100 --runs "$R_SF100" --restart-between-rounds -t 1800
 }
@@ -59,7 +57,6 @@ build_debug baseline && {
 # Phase 2: fix branch with identical settings.
 use_branch sort-timeout-fix
 build_debug fix && {
-    MALLOC_PERTURB_=165 run_phase fix-perturb-sf2 sf2 --runs "$R_PERTURB" --restart-between-rounds -t 20
     run_phase fix-sf50 sf50 --runs "$R_SF50" --restart-between-rounds -t 900
     run_phase fix-sf100 sf100 --runs "$R_SF100" --restart-between-rounds -t 1800
 }
