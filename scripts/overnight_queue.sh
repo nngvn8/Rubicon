@@ -12,6 +12,7 @@ mkdir -p "$QDIR/out"
 cd "$REPO" || exit 1
 
 export CU_SCRIPT="$REPO/scripts/start_cu_sf.sh"
+export STOP_ON_FAILURE=true   # ingest costs ~16 min at SF50, so keep one CU per phase and stop at the first failure
 
 # Rounds per phase (overridable from the environment).
 R_SF50=${R_SF50:-40}
@@ -50,15 +51,15 @@ build_debug() {
 # Phase 1: baseline on the large scale factors, where the failure was observed.
 use_branch sort-timeout-baseline
 build_debug baseline && {
-    run_phase base-sf50 sf50 --runs "$R_SF50" --restart-between-rounds -t 900
-    run_phase base-sf100 sf100 --runs "$R_SF100" --restart-between-rounds -t 1800
+    run_phase base-sf50 sf50 --runs "$R_SF50" -t 900
+    run_phase base-sf100 sf100 --runs "$R_SF100" -t 1800
 }
 
 # Phase 2: fix branch with identical settings.
 use_branch sort-timeout-fix
 build_debug fix && {
-    run_phase fix-sf50 sf50 --runs "$R_SF50" --restart-between-rounds -t 900
-    run_phase fix-sf100 sf100 --runs "$R_SF100" --restart-between-rounds -t 1800
+    run_phase fix-sf50 sf50 --runs "$R_SF50" -t 900
+    run_phase fix-sf100 sf100 --runs "$R_SF100" -t 1800
 }
 
 log "QUEUE DONE"

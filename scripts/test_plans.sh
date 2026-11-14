@@ -420,6 +420,9 @@ for ((ROUND=1; ROUND<=TOTAL_ROUNDS; ROUND++)); do
     else
         run_selection "$ACTIVE_DIR" "$TOTAL_PLANS" "$ROUND_LABEL"
     fi
+
+    # STOP_ON_FAILURE=true: a hung CU makes all later rounds fail, so end the run at the first failure.
+    if [[ "${STOP_ON_FAILURE:-false}" == true && ${#FAILED_PLANS[@]} -gt 0 ]]; then break; fi
 done
 
 # --- Summary -----------------------------------------------------------------
