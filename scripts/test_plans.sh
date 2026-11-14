@@ -21,6 +21,7 @@ CU_SCRIPT="${CU_SCRIPT:-${HOME}/start_rubi_cu.sh}"
 
 # --- Option defaults (overridden by the argument parser) ---------------------
 
+CU_READY_TIMEOUT=${CU_READY_TIMEOUT:-900}   # Max seconds to wait for CU data ingest
 TIMEOUT_SECONDS=20              # Per-plan budget; scaled by plan count per batch
 VERBOSE=false                   # Dump full run_query.py output per invocation
 LOG_CU=false                    # Write CU log to testing/cu-<timestamp>.log
@@ -195,9 +196,23 @@ start_cu() {
     # Kill the previous instance so only one CU runs.
     stop_cu
 
+    # Byte offset marking where this instance's output starts in the shared, appended log.
+    local log_offset
+    log_offset="$(stat -c %s "${CU_LOG}" 2>/dev/null || echo 0)"
+
     bash "${CU_SCRIPT}" >> "${CU_LOG}" 2>&1 &
     CU_PID=$!
     sleep 1
+
+    # Large scale factors need minutes to ingest; the CU only registers with Grouper afterwards.
+    local waited=0
+    # Process substitution keeps tail's SIGPIPE from tripping pipefail once grep -q matches.
+    until grep -q 'Data ingested!' <(tail -c "+$((log_offset + 1))" "${CU_LOG}"); do
+        if ! pgrep -f "build/bin/computeUnit" >/dev/null || (( waited >= CU_READY_TIMEOUT )); then break; fi
+        sleep 2
+        waited=$((waited + 2))
+    done
+    sleep 2
 
     # Liveness check by process name; the launcher PID does not identify the binary.
     if ! pgrep -f "build/bin/computeUnit" >/dev/null; then
