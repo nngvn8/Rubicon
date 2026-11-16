@@ -21,7 +21,7 @@ class MaterializeOperator : public AbstractOperator {
         using base_t = _SimdStyle::base_type;
 
         tsl::executor<tsl::runtime::cpu> exec;
-        base_t* result_ptr = exec.allocate<base_t>(column->elements, 64);
+        base_t* result_ptr = memtrack::tracked_allocate<base_t>(exec, column->elements, 64);
         tuddbs::InMemoryColumn<base_t> res_col(result_ptr, column->elements);
 
         const size_t elements_per_byte = _SimdStyle::vector_element_count() < CHAR_BIT ? _SimdStyle::vector_element_count() : CHAR_BIT;
@@ -61,10 +61,8 @@ class MaterializeOperator : public AbstractOperator {
 
         std::shared_ptr<Column> resColumn = std::make_shared<Column>(0, column->datatype, size_in_bytes, offset, false, true);
 
-        void* q = std::realloc(result_ptr, size_in_bytes);
-        // When shrinking, realloc failure is rare but *possible*.
-        // If it fails, result_ptr is still valid and you keep the larger block.
-        if (q) result_ptr = static_cast<base_t*>(q);
+        // Shrink the worst-case buffer to the actual result (also books the shrink)
+        result_ptr = memtrack::tracked_shrink(result_ptr, size_in_bytes);
 
         resColumn->setDataPtr(static_cast<void*>(result_ptr));
         if (column->datatype == DataType::string_enc) {
@@ -83,7 +81,7 @@ class MaterializeOperator : public AbstractOperator {
 
         tsl::executor<tsl::runtime::cpu> exec;
 
-        base_t* result_ptr = exec.allocate<base_t>(idx->elements, 64);
+        base_t* result_ptr = memtrack::tracked_allocate<base_t>(exec, idx->elements, 64);
 
         size_t* idx_ptr = static_cast<size_t*>(idx->data);
 

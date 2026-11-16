@@ -25,7 +25,7 @@ class AggregateOperator : public AbstractOperator {
 
         using cpu_executor = tsl::executor<tsl::runtime::cpu>;
         cpu_executor exec;
-        size_t* res_ptr = exec.allocate<size_t>(1, 64);
+        size_t* res_ptr = memtrack::tracked_allocate<size_t>(exec, 1, 64);
 
         *res_ptr = column->elements;
 
@@ -46,7 +46,7 @@ class AggregateOperator : public AbstractOperator {
 
         using cpu_executor = tsl::executor<tsl::runtime::cpu>;
         cpu_executor exec;
-        base_t* res_ptr = exec.allocate<base_t>(1, 64);
+        base_t* res_ptr = memtrack::tracked_allocate<base_t>(exec, 1, 64);
 
         column->wait_data_allocated();
         View chunk = View<base_t>(static_cast<base_t*>(column->data), column->elements, column);  // even though we process all data at once, the chunk is needed for the data transfer protection logic to be sure the needed data is available
@@ -71,7 +71,7 @@ class AggregateOperator : public AbstractOperator {
         using cpu_executor = tsl::executor<tsl::runtime::cpu>;
         cpu_executor exec;
 
-        base_t* res_ptr = exec.allocate<base_t>(1, 64);
+        base_t* res_ptr = memtrack::tracked_allocate<base_t>(exec, 1, 64);
 
         column->wait_data_allocated();
         View chunk = View<base_t>(static_cast<base_t*>(column->data), column->elements, column);  // even though we process all data at once, the chunk is needed for the data transfer protection logic to be sure the needed data is available
@@ -96,7 +96,7 @@ class AggregateOperator : public AbstractOperator {
         using cpu_executor = tsl::executor<tsl::runtime::cpu>;
         cpu_executor exec;
 
-        base_t* res_ptr = exec.allocate<base_t>(1, 64);
+        base_t* res_ptr = memtrack::tracked_allocate<base_t>(exec, 1, 64);
 
         column->wait_data_allocated();
         View chunk = View<base_t>(static_cast<base_t*>(column->data), column->elements, column);  // even though we process all data at once, the chunk is needed for the data transfer protection logic to be sure the needed data is available
@@ -120,7 +120,7 @@ class AggregateOperator : public AbstractOperator {
 
         using cpu_executor = tsl::executor<tsl::runtime::cpu>;
         cpu_executor exec;
-        double* res_ptr = exec.allocate<double>(1, 64);
+        double* res_ptr = memtrack::tracked_allocate<double>(exec, 1, 64);
 
         column->wait_data_allocated();
         View chunk = View<base_t>(static_cast<base_t*>(column->data), column->elements, column);  // even though we process all data at once, the chunk is needed for the data transfer protection logic to be sure the needed data is available

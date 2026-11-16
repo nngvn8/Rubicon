@@ -69,13 +69,13 @@ class HashJoinOperatorMat : public AbstractOperator {
 
         // Allocating result data for the join
         tsl::executor<tsl::runtime::cpu> exec;
-        size_t* join_result_id_a = exec.allocate<size_t>(outerElements);
-        size_t* join_result_id_b = exec.allocate<size_t>(outerElements);
+        size_t* join_result_id_a = memtrack::tracked_allocate<size_t>(exec, outerElements);
+        size_t* join_result_id_b = memtrack::tracked_allocate<size_t>(exec, outerElements);
 
         LOG_DEBUG2("[HashJoinOperator] Starting Hash-Phase." << std::endl;)
         innerColumn->wait_data_allocated();
 
-        std::vector<base_t> materializedInner;
+        std::vector<base_t, memtrack::TempAlloc<base_t>> materializedInner;  // temporary, counted by the allocator
         const base_t* innerKeys = nullptr;
 
         // If position list for inner column has been provided
@@ -159,19 +159,9 @@ class HashJoinOperatorMat : public AbstractOperator {
         std::shared_ptr<Column> resColumnInner = std::make_shared<Column>(0, DataType::position_list, size_in_bytes_a, join_result, false, true);
         std::shared_ptr<Column> resColumnOuter = std::make_shared<Column>(0, DataType::position_list, size_in_bytes_b, join_result, false, true);
 
-        {
-            void* q = std::realloc(join_result_id_a, size_in_bytes_a);
-            // When shrinking, realloc failure is rare but *possible*.
-            // If it fails, join_result_id_a is still valid and you keep the larger block.
-            if (q) join_result_id_a = static_cast<size_t*>(q);
-        }
-
-        {
-            void* q = std::realloc(join_result_id_b, size_in_bytes_b);
-            // When shrinking, realloc failure is rare but *possible*.
-            // If it fails, join_result_id_b is still valid and you keep the larger block.
-            if (q) join_result_id_b = static_cast<size_t*>(q);
-        }
+        // Shrink both worst-case buffers to the number of matches (also books the shrinks)
+        join_result_id_a = memtrack::tracked_shrink(join_result_id_a, size_in_bytes_a);
+        join_result_id_b = memtrack::tracked_shrink(join_result_id_b, size_in_bytes_b);
 
         resColumnInner->setDataPtr(static_cast<void*>(join_result_id_a));
         resColumnOuter->setDataPtr(static_cast<void*>(join_result_id_b));

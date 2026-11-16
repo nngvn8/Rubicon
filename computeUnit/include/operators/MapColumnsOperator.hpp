@@ -16,7 +16,7 @@ class MapColumnsOperator : public AbstractOperator {
 
         using cpu_executor = tsl::executor<tsl::runtime::cpu>;
         cpu_executor exec;
-        base_t* res_ptr = exec.allocate<base_t>(inputColumn->elements, 64);
+        base_t* res_ptr = memtrack::tracked_allocate<base_t>(exec, inputColumn->elements, 64);
 
         inputColumn->wait_data_allocated();
         partnerColumn->wait_data_allocated();

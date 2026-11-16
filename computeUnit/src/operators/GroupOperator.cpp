@@ -1,15 +1,14 @@
 
 #include <fstream>
+#include <infrastructure/MemTracker.hpp>
 #include <numeric>
 #include <operators/GroupOperator.hpp>
 
 std::shared_ptr<Column> addResultToCatalog(void* data, size_t size_in_bytes, size_t elements, DataType type, std::string table_ident, std::string column_ident) {
     std::shared_ptr<Column> catalog_column = std::make_shared<Column>(0, type, size_in_bytes, elements, false, true);
 
-    void* q = std::realloc(data, size_in_bytes);
-    // When shrinking, realloc failure is rare but *possible*.
-    // If it fails, data is still valid and you keep the larger block.
-    if (q) data = q;
+    // Shrink the worst-case buffer to the result size (also books the shrink)
+    data = memtrack::tracked_shrink(data, size_in_bytes);
 
     catalog_column->setDataPtr(data);
     auto res = DataCatalog::getInstance().addColumn(table_ident, column_ident, catalog_column);
@@ -50,7 +49,7 @@ WorkResponse GroupOperator::run() {
     }
 
     // Create an index for the sorter. It corresponds to all columns of the table
-    idx_t* intermediate_idx_ptr = exec.allocate<idx_t>(group_columns.front()->elements, 64);
+    idx_t* intermediate_idx_ptr = memtrack::tracked_allocate<idx_t>(exec, group_columns.front()->elements, 64);
     tuddbs::InMemoryColumn<size_t> idx_col(intermediate_idx_ptr, group_columns.front()->elements);
     std::iota(intermediate_idx_ptr, intermediate_idx_ptr + group_columns.front()->elements, 0);
     LOG_DEBUG1("[GroupOperator] Created dummy index with " << group_columns.front()->elements << " elements." << std::endl;)
@@ -68,7 +67,7 @@ WorkResponse GroupOperator::run() {
 
     // This column will hold the lengths of the cluster, i.e. it run-length encodes on where to look in the sorted index
     // (intermediate_idx_ptr) for the corresponding elemnents
-    size_t* intermediate_cluster_ptr = exec.allocate<size_t>(group_columns.front()->elements, 64);
+    size_t* intermediate_cluster_ptr = memtrack::tracked_allocate<size_t>(exec, group_columns.front()->elements, 64);
     tuddbs::InMemoryColumn<size_t> cluster_col(intermediate_cluster_ptr, group_columns.front()->elements);
 
     // Write pointer to the RLE-cluster-length column
@@ -100,7 +99,7 @@ WorkResponse GroupOperator::run() {
     }
 
     // This is a position list, that contains the first occurrence of a group element
-    idx_t* group_extends_ptr = exec.allocate<idx_t>(cluster_entries, 64);
+    idx_t* group_extends_ptr = memtrack::tracked_allocate<idx_t>(exec, cluster_entries, 64);
     idx_t* group_extends_write_ptr = group_extends_ptr;
     size_t index_offset_accessor = 0;
     for ( auto it = cluster_col.cbegin(); it != cluster_col.cbegin() + cluster_entries; ++it, ++group_extends_write_ptr ) {
@@ -122,7 +121,7 @@ WorkResponse GroupOperator::run() {
 
     /* Is an aggregation, i.e. sum, based on the clusters necessary? */
     if (m_work_item.multigroupdata().has_aggregationcolumn()) {
-        uint64_t* aggregation_ptr = exec.allocate<uint64_t>(cluster_entries, 64);
+        uint64_t* aggregation_ptr = memtrack::tracked_allocate<uint64_t>(exec, cluster_entries, 64);
         tuddbs::InMemoryColumn<uint64_t> cluster_aggregation_col(aggregation_ptr, cluster_entries);
         memset( aggregation_ptr, 0, cluster_entries * sizeof(uint64_t) );
         auto aggregation_column = DataCatalog::getInstance().getColumnByName(m_work_item.multigroupdata().aggregationcolumn().tabname(), m_work_item.multigroupdata().aggregationcolumn().colname());

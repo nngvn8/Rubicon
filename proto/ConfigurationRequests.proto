@@ -5,6 +5,7 @@ package ddd.config;
 enum ConfigType {
   SET_WORKER = 1;
   RESET_CATALOG = 2;
+  FLUSH_MEMORY_LOG = 3;  // write the memory tracking log to disk (end of a benchmark round)
 }
 
 message ConfigurationItem {

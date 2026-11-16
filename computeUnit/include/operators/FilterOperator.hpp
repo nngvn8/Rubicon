@@ -4,6 +4,7 @@
 #include <algorithms/utils/hinting.hpp>  // SIMDOps
 #include <datastructures/column.hpp>     // SIMDOps
 #include <infrastructure/DataCatalog.hpp>
+#include <infrastructure/MemTracker.hpp>
 #include <operators/AbstractOperator.hpp>
 
 /**
@@ -28,7 +29,7 @@ class FilterOperator : public AbstractOperator {
         using intermediate_t = FilterImpl::ResultType;
         using cpu_executor = tsl::executor<tsl::runtime::cpu>;
         cpu_executor exec;
-        intermediate_t* res_ptr = exec.allocate<intermediate_t>(column->elements, 64);
+        intermediate_t* res_ptr = memtrack::tracked_allocate<intermediate_t>(exec, column->elements, 64);
         tuddbs::InMemoryColumn<intermediate_t> res_col(res_ptr, column->elements);
 
         column->wait_data_allocated();
@@ -79,10 +80,8 @@ class FilterOperator : public AbstractOperator {
             LOG_DEBUG1("[FilterOperator::doFilter] Producing PositionList with " << offset << " elements and " << size_in_bytes << " Bytes." << std::endl;)
             resColumn->datatype = DataType::position_list;
 
-            void* q = std::realloc(res_ptr, size_in_bytes);
-            // When shrinking, realloc failure is rare but *possible*.
-            // If it fails, res_ptr is still valid and you keep the larger block.
-            if (q) res_ptr = static_cast<intermediate_t*>(q);
+            // Shrink the worst-case buffer to the actual result (also books the shrink)
+            res_ptr = memtrack::tracked_shrink(res_ptr, size_in_bytes);
         }
         
         resColumn->setDataPtr(static_cast<void*>(res_ptr));
@@ -101,7 +100,7 @@ class FilterOperator : public AbstractOperator {
         using intermediate_t = FilterImpl::ResultType;
         using cpu_executor = tsl::executor<tsl::runtime::cpu>;
         cpu_executor exec;
-        intermediate_t* res_ptr = exec.allocate<intermediate_t>(column->elements, 64);
+        intermediate_t* res_ptr = memtrack::tracked_allocate<intermediate_t>(exec, column->elements, 64);
         tuddbs::InMemoryColumn<intermediate_t> res_col(res_ptr, column->elements);
 
         column->wait_data_allocated();
@@ -154,10 +153,8 @@ class FilterOperator : public AbstractOperator {
             LOG_DEBUG1("[FilterOperator::doFilter] Producing PositionList with " << offset << " elements and " << size_in_bytes << " Bytes." << std::endl;)
             resColumn->datatype = DataType::position_list;
 
-            void* q = std::realloc(res_ptr, size_in_bytes);
-            // When shrinking, realloc failure is rare but *possible*.
-            // If it fails, res_ptr is still valid and you keep the larger block.
-            if (q) res_ptr = static_cast<intermediate_t*>(q);
+            // Shrink the worst-case buffer to the actual result (also books the shrink)
+            res_ptr = memtrack::tracked_shrink(res_ptr, size_in_bytes);
         }
 
         resColumn->setDataPtr(static_cast<void*>(res_ptr));
@@ -195,7 +192,7 @@ class FilterOperator : public AbstractOperator {
             return 0;
         }
 
-        std::vector<size_t> result_vec;
+        std::vector<size_t, memtrack::TempAlloc<size_t>> result_vec;  // temporary, counted by the allocator
         result_vec.reserve(column->elements);
 
         column->wait_data_allocated();
@@ -229,6 +226,7 @@ class FilterOperator : public AbstractOperator {
         }
         if (!res_data) throw std::bad_alloc{};
         std::memcpy(res_data, result_vec.data(), result_vec.size() * sizeof(size_t));
+        memtrack::onAlloc(res_data, result_vec.size() * sizeof(size_t));  // output buffer, adopted by setDataPtr below
         resColumn->setDataPtr(res_data);
 
         LOG_DEBUG1("[FilterOperator::doActualInFilter] My result has " << resColumn->elements << " elements." << std::endl;)
@@ -244,7 +242,7 @@ class FilterOperator : public AbstractOperator {
         using intermediate_t = FilterImpl::ResultType;
         using cpu_executor = tsl::executor<tsl::runtime::cpu>;
         cpu_executor exec;
-        intermediate_t* res_ptr = exec.allocate<intermediate_t>(column->elements, 64);
+        intermediate_t* res_ptr = memtrack::tracked_allocate<intermediate_t>(exec, column->elements, 64);
         tuddbs::InMemoryColumn<intermediate_t> res_col(res_ptr, column->elements);
 
         column->wait_data_allocated();
@@ -295,10 +293,8 @@ class FilterOperator : public AbstractOperator {
                 LOG_DEBUG1("[FilterOperator::doFilter] Producing PositionList" << std::endl;)
                 resColumn->datatype = DataType::position_list;
 
-                void* q = std::realloc(res_ptr, size_in_bytes);
-                // When shrinking, realloc failure is rare but *possible*.
-                // If it fails, res_ptr is still valid and you keep the larger block.
-                if (q) res_ptr = static_cast<intermediate_t*>(q);
+                // Shrink the worst-case buffer to the actual result (also books the shrink)
+                res_ptr = memtrack::tracked_shrink(res_ptr, size_in_bytes);
             }
 
             resColumn->setDataPtr(static_cast<void*>(res_ptr));

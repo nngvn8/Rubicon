@@ -70,7 +70,7 @@ class SetIntersectOperator : public AbstractOperator {
 
         using cpu_executor = tsl::executor<tsl::runtime::cpu>;
         cpu_executor exec;
-        typename SimdStyle::base_type* res_ptr = exec.allocate<typename SimdStyle::base_type>(col1_struct->elements, 64);
+        typename SimdStyle::base_type* res_ptr = memtrack::tracked_allocate<typename SimdStyle::base_type>(exec, col1_struct->elements, 64);
 
         LOG_DEBUG1("do_intersect res_col type: " << tsl::type_name<typename SimdStyle::base_type>() << std::endl;)
         tuddbs::InMemoryColumn<typename SimdStyle::base_type> res_col(res_ptr, col1_struct->elements);
@@ -150,7 +150,7 @@ class SetIntersectOperator : public AbstractOperator {
 
         using cpu_executor = tsl::executor<tsl::runtime::cpu>;
         cpu_executor exec;
-        uint64_t* res_ptr = exec.allocate<uint64_t>(out.size(), 64);
+        uint64_t* res_ptr = memtrack::tracked_allocate<uint64_t>(exec, out.size(), 64);
         std::memcpy(res_ptr, out.data(), out.size() * sizeof(uint64_t));
         std::shared_ptr<Column> resColumn = std::make_shared<Column>(0, DataType::position_list, out.size() * sizeof(uint64_t), out.size(), false, true);
         resColumn->setDataPtr(static_cast<void*>(res_ptr));

@@ -2,6 +2,7 @@
 #include <WorkResponse.pb.h>
 
 #include <infrastructure/Utility.hpp>
+#include <infrastructure/MemTracker.hpp>
 #include <bitset>
 #include <factories/AggregateFactory.hpp>
 #include <factories/DataTransferFactory.hpp>
@@ -86,7 +87,11 @@ void OperatorDispatcher::dispatch(const uint64_t target_uuid, WorkItem witem) co
 #ifdef SINGLE_CPU_EXEC
     if (m_factories.contains(reqOpId)) {
         AbstractOperator* op = m_factories.at(reqOpId)->create_operator(witem);
-        t.response = std::move(op->run());
+        {
+            memtrack::OperatorScope scope(witem);
+            t.response = std::move(op->run());
+            scope.finish(t.response);
+        }
     } else {
         LOG_ERROR("[OperatorDispatcher] Operator not supported:\n"
                       << witem.DebugString() << std::endl;)

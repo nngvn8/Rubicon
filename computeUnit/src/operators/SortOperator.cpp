@@ -1,5 +1,6 @@
 
 #include <operators/SortOperator.hpp>
+#include <infrastructure/MemTracker.hpp>
 #include <numeric>
 
 WorkResponse SortOperator::run() {
@@ -32,7 +33,7 @@ WorkResponse SortOperator::run() {
 
     tsl::executor<tsl::runtime::cpu> exec;
     const size_t idx_count = sort_columns[0]->elements;
-    size_t* sort_idx = exec.allocate<size_t>(idx_count, 64);
+    size_t* sort_idx = memtrack::tracked_allocate<size_t>(exec, idx_count, 64);
     tuddbs::InMemoryColumn<size_t> idx_col(sort_idx, idx_count);
     if (m_work_item.sortdata().has_existingindex()) {
         const auto idxinfo = m_work_item.sortdata().existingindex();

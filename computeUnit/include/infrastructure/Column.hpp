@@ -4,6 +4,7 @@
 #include <stddef.h>
 
 #include <infrastructure/Logger.hpp>
+#include <infrastructure/MemTracker.hpp>
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
@@ -299,6 +300,11 @@ class Column {
    private:
     tsl::executor<tsl::runtime::cpu> executor;
 
+    // Memory tracking: the operator that produced the buffer and the bytes booked for it.
+    // Both stay empty/0 for buffers created outside an operator (base data, transfers).
+    [[no_unique_address]] memtrack::Owner owner;
+    size_t trackedBytes = 0;
+
     template <typename T>
     void allocate_aligned_internal(size_t _elements) {
         if (data == nullptr) {
@@ -317,6 +323,10 @@ class Column {
                 end = static_cast<void*>(static_cast<char*>(data) + sizeInBytes);
                 LOG_DEBUG2("[Column] Allocated " << sizeInBytes << " bytes on NUMA node " << numaNodeId << "." << std::endl;)
             }
+            // Book the buffer to the running operator (no-op outside an operator, because valid is false here)
+            owner = memtrack::currentOwner();
+            memtrack::onAlloc(data, sizeInBytes);
+            trackedBytes = memtrack::adopt(data);
             if (!isRemote && isComplete) {
                 currentEnd = end;
             } else {
@@ -511,10 +521,14 @@ class Column {
             LOG_ERROR("[Column] Invalid data pointer submitted. Aborting." << std::endl;)
             return;
         } else if (data != nullptr) {
+            memtrack::onFree(owner, trackedBytes);  // the replaced buffer is gone
             executor.deallocate(data);
         }
 
         data = newDataPtr;
+        // Take over the booking made by tracked_allocate (0 if the buffer was not booked)
+        owner = memtrack::currentOwner();
+        trackedBytes = memtrack::adopt(data);
 
         if (_sizeInBytes != 0) {
             sizeInBytes = _sizeInBytes;
@@ -560,6 +574,7 @@ class Column {
     }
 
     ~Column() {
+        memtrack::onFree(owner, trackedBytes);  // runs on whichever thread drops the last reference
         if (data) {
             if (numaNodeId == -1) {
                 executor.deallocate(data);

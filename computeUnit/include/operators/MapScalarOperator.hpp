@@ -16,7 +16,7 @@ class MapScalarOperator : public AbstractOperator {
 
         using cpu_executor = tsl::executor<tsl::runtime::cpu>;
         cpu_executor exec;
-        base_t* res_ptr = exec.allocate<base_t>(column->elements, 64);
+        base_t* res_ptr = memtrack::tracked_allocate<base_t>(exec, column->elements, 64);
 
         column->wait_data_allocated();
         View chunk = View<base_t>(static_cast<base_t*>(column->data), chunkElements, column);

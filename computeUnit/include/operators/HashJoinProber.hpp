@@ -1,12 +1,15 @@
 #pragma once
 
 #include <cstddef>
+#include <infrastructure/MemTracker.hpp>
 #include <unordered_map>
 
 namespace hash_join {
 
+// The allocator reports the table's nodes and buckets as temporary memory of the running operator.
 template <typename KeyT>
-using HashTable = std::unordered_map<KeyT, size_t>;
+using HashTable = std::unordered_map<KeyT, size_t, std::hash<KeyT>, std::equal_to<KeyT>,
+                                     memtrack::TempAlloc<std::pair<const KeyT, size_t>>>;
 
 /**
  * Build a hash table that retains the first position for every inner key.

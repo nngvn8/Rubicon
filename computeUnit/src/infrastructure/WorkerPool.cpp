@@ -1,6 +1,7 @@
 #include <numa.h>
 
 #include <infrastructure/Logger.hpp>
+#include <infrastructure/MemTracker.hpp>
 #include <infrastructure/WorkerPool.hpp>
 #include <sstream>
 
@@ -199,7 +200,12 @@ UnitWorker::UnitWorker(WorkerPool* pool, cpu_set_t affinity) : owning_pool(pool)
                 LOG_DEBUG1("[EventLoop] I (" << this << ") found a nullptr -- Terminating." << std::endl;)
                 break;
             }
-            my_task.response = std::move(my_task.op->run());
+            {
+                // Attributes allocations and page faults on this thread to this operator
+                memtrack::OperatorScope scope(my_task.original_work_item);
+                my_task.response = std::move(my_task.op->run());
+                scope.finish(my_task.response);
+            }
             owning_pool->onFinish(my_task);
             busy = false;
         }

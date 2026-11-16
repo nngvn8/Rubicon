@@ -11,6 +11,7 @@
 #include <infrastructure/TCPClient.hpp>
 #include <infrastructure/Utility.hpp>
 #include <infrastructure/Logger.hpp>
+#include <infrastructure/MemTracker.hpp>
 #include <algorithm>
 #include <bitset>
 #include <chrono>
@@ -70,6 +71,13 @@ int main(int argc, char** argv) {
     const std::string load_binary = parser.takeParseArg<std::string>("-basedata", "[Info] Loading SSB as CSV. Set with [-basedata] to \'bin\' or \'csv\'", "bin", false);
     const ssize_t node = parser.takeParseArg<ssize_t>("-node", "[Info] No NUMA node affinity given. Set with [-node]. -1 means all nodes. Using default: [-1].", -1, false);
     const ssize_t cxl_node = parser.takeParseArg<ssize_t>("-cxl_node", "[Info] No CXL-NUMA node affinity given. Set with [-cxl_node]. -1 means any node is used for data. Using default: [-1].", -1, false);
+
+#ifdef RAM_TRACKING
+    // Memory tracking log: file written on FLUSH_MEMORY_LOG, number of events it can hold between two flushes
+    const std::string memLogPath = parser.takeParseArg<std::string>("-memlog", "[Info] No memory log path given. Set with [-memlog]. Default: [memtrack.bin].", "memtrack.bin", false);
+    const size_t memLogCapacity = parser.takeParseArg<size_t>("-memlogcap", "[Info] No memory log capacity given. Set with [-memlogcap] (events). Default: [262144].", 262144, false);
+    memtrack::init(memLogCapacity);
+#endif
 
     if (pathToData.size() > 0) {
         LOG_DEBUG1("[ComputeUnit] Ingesting SSB data from path: " << pathToData << " to NUMA node " << cxl_node << std::endl;)
@@ -332,6 +340,11 @@ int main(int argc, char** argv) {
             DataCatalog::getInstance().clearCatalog(false);
 
             response = "[" + prettyName + "] Catalog cleared.";
+#ifdef RAM_TRACKING
+        } else if (ci.type() == ddd::config::FLUSH_MEMORY_LOG) {
+            const bool ok = memtrack::flush(memLogPath);
+            response = "[" + prettyName + "] Memory log " + (ok ? "flushed to " + memLogPath + "." : "flush FAILED.");
+#endif
         } else {
             LOG_ERROR("I received a strange configuration action.";)
         }
