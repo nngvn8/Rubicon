@@ -77,6 +77,28 @@ Run focused data and configuration checks:
 python3 -m unittest discover -s scripts/benchmark_plotting/tests
 ```
 
+## RAM timelines
+
+RAM collection exports data only. Render a recorded session afterward:
+
+```bash
+python3 scripts/benchmark_plotting/plot_memory.py /path/to/benchmark-session
+```
+
+The input may also be that session's `results.json` or `memory_summary.json`.
+The command reads `memory_samples.csv` and `memory_summary.json` without changing
+them. It writes `memory.png` and a source-fingerprinted `manifest.json` into a
+new batch under `benchmarking/plots/memory/`. Use `--output-dir PATH` to choose
+another output parent. Regenerating a plot creates a new batch.
+
+The top panel shows whole-CU RSS, its fixed baseline, and round boundaries.
+The lower panel shows plan intervals per query and clock-aligned operator
+segments; warmup plans are faded. Large sampling gaps break the RSS curve.
+Execution intervals show concurrent activity, not ownership of resident memory.
+Absolute and baseline-relative integrals remain in `memory_summary.json`;
+overlapping window integrals must not be summed. RAM plotting is separate from
+the two-experiment timing-comparison configuration and browser.
+
 All percentage-change summaries compare the two timing medians:
 `100 * (median(comparison) / median(baseline) - 1)`. Negative means faster.
 This applies to change labels, metric-comparison markers, and cross-scale

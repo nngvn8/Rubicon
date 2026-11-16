@@ -20,4 +20,11 @@ message PlanResponse {
   optional string info = 2;
   optional bool success = 3;
   repeated ExtendedResult extendedResults = 4;
+  // Clock pair captured immediately before sending this response. Operators use
+  // high_resolution_clock; the external RSS collector uses CLOCK_MONOTONIC.
+  optional uint64 operatorClockNs = 5;
+  optional uint64 collectorClockNs = 6;
+  optional uint64 clockAnchorUncertaintyNs = 7;
+  optional uint32 computeUnitPid = 8;
+  optional string computeUnitHost = 9;
 }

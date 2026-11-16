@@ -1,8 +1,12 @@
 import argparse
 import json
+import math
 import platform
 import re
 import statistics
+import signal
+import shlex
+import subprocess
 import sys
 import threading
 import time
@@ -18,6 +22,7 @@ from utils import msg
 from utils import client as tcp_client
 from utils import util
 from utils.unique_id import new_uint32_id
+from utils.memory import MemorySession
 
 from proto import NetworkRequests_pb2 as NetworkRequests
 from proto import WorkRequest_pb2 as WorkRequest
@@ -34,8 +39,7 @@ from utils.queries import q_1_1, q_1_2, q_1_3, q_2_1, q_2_2, q_2_3, q_3_1, q_3_2
 queries_dict = {"q_1_1": q_1_1, "q_1_2": q_1_2, "q_1_3": q_1_3, "q_2_1": q_2_1, "q_2_2": q_2_2, "q_2_3": q_2_3, "q_3_1": q_3_1, "q_3_2": q_3_2, "q_3_3": q_3_3, "q_3_4": q_3_4, "q_4_1": q_4_1, "q_4_2": q_4_2, "q_4_3": q_4_3}
 
 # Set this to True to collect timings without passing --write-benchmark-results.
-WRITE_BENCHMARK_RESULTS = True
-BENCHMARK_ROOT = Path(__file__).resolve().parent.parent / "benchmarking"
+BENCHMARK_ROOT = Path(__file__).resolve().parent.parent / "benchmarking" / "data"
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 PLAN_SOURCES = {
     "plans": REPOSITORY_ROOT / "data" / "plans",
@@ -305,6 +309,7 @@ def load_benchmark_config(config_path: Optional[str]) -> Dict:
     try:
         with path.open("r", encoding="utf-8") as config_file:
             config = yaml.safe_load(config_file) or {}
+    ################## Data Validation START ####################
     except (OSError, yaml.YAMLError) as error:
         raise ValueError(f"could not read config {path}: {error}") from error
     if not isinstance(config, dict):
@@ -328,6 +333,7 @@ def load_benchmark_config(config_path: Optional[str]) -> Dict:
     for key, value in optimization.items():
         if key != "mat_type" and not isinstance(value, bool):
             raise ValueError(f"optimization field {key!r} must be a boolean")
+    ################## Data Validation END ####################
     config["optimization"] = optimization
     if "variant" in config:
         config["variant"] = {
@@ -362,6 +368,56 @@ def write_benchmark_results(benchmark_file: Path, results: Dict) -> None:
         json.dump(results, output_file, indent=2, sort_keys=True)
         output_file.write("\n")
 
+def running_compute_unit(user="mschmidt") -> Dict:
+    """Extract configuration from exactly one CU owned by mschmidt."""
+    # Avoid a shell/grep subprocess matching its own search command; keep full command lines.
+    listing = subprocess.run(['ps', 'auxww'], check=True, capture_output=True, text=True).stdout
+    expected = ('-ip', '-port', '-path', '-basedata', '-worker', '-node', '-cxl_node')
+    matches = []
+    candidates = []
+    for line in listing.splitlines()[1:]:
+        # ps aux has ten fixed columns followed by the complete COMMAND column.
+        columns = line.split(None, 10)
+        if len(columns) != 11:
+            continue
+        # Ignore ComputeUnits belonging to other users on the shared machine.
+        if columns[0] != user:
+            continue
+        command = columns[10]
+        # Match the executable, not another process mentioning a CU in its arguments.
+        executable = command.split(None, 1)[0]
+        if not re.search(r'/bin/computeUnit$', executable):
+            continue
+        candidates.append(f'PID {columns[1]}: {command}')
+        tokens = shlex.split(command)
+        # Require every expected flag exactly once, followed by its value.
+        # All of them must be there. 
+        # All of them must be followed by a value. 
+        # There cannot not be too many as otherwise exceeding length.
+        if any(tokens.count(flag) != 1 or tokens.index(flag) + 1 >= len(tokens)
+               or tokens[tokens.index(flag) + 1] in expected for flag in expected):
+            continue
+        flags = {flag: tokens[tokens.index(flag) + 1] for flag in expected}
+        # Matches are pairs of pids and their corresponding flag dictionaries.
+        matches.append((int(columns[1]), flags))
+    if len(matches) != 1:
+        raise RuntimeError(f'Expected exactly one /bin/computeUnit owned by mschmidt with flags {expected}; '
+                           f'found {len(matches)} matching processes. CU candidates: {candidates}')
+    pid, flags = matches[0]
+    # Scale factor is encoded in the dataset directory, not an independent CU flag.
+    scale = re.fullmatch(r'sf([1-9][0-9]*)', Path(flags['-path']).name)
+    if scale is None:
+        raise ValueError(f"Cannot infer scale factor from CU data path {flags['-path']!r}; expected sf<number>")
+    port, workers = int(flags['-port']), int(flags['-worker'])
+    if not 1 <= port <= 65535 or workers <= 0:
+        raise ValueError(f'Invalid CU port or worker count: {flags}')
+    # Preserve the other launch settings as provenance alongside the benchmark results.
+    return {'cu_pid': pid, 'ip': flags['-ip'], 'port': port,
+            'workers_per_cu': workers, 'scale_factor': int(scale[1]),
+            'data_path': flags['-path'], 'basedata': flags['-basedata'],
+            'node': int(flags['-node']), 'cxl_node': int(flags['-cxl_node'])}
+
+
 # ----------------------------
 # Main
 # ----------------------------
@@ -393,14 +449,11 @@ def main():
         default=benchmark_defaults.get("execution_mode", "sequential"),
         help="Submit and wait per query, or submit the entire batch before waiting.",
     )
-    parser.add_argument("-ip", default="127.0.0.1")
-    parser.add_argument("-port", default=23233)
-    parser.add_argument("--scale-factor", type=int, default=benchmark_defaults.get("scale_factor", 2))
-    parser.add_argument("--workers-per-cu", type=int, default=benchmark_defaults.get("workers_per_cu", 48))
-    parser.add_argument("-info", default="Sequentially running a set of querries")
-    parser.add_argument("-name", default="Sequentially running a set of querries client")
-    parser.add_argument('-q', help='Which quer[ies] to run. If multiple queries are given, write as CSV.', default=False, required=False)
-    parser.add_argument('-f', help='Folder to read .pb queries from (overrides --plan-source).')
+    # Client labels and optional query selection remain CLI-only settings.
+    parser.add_argument("-info", default="Query benchmark")
+    parser.add_argument("-name", default="Query benchmark client")
+    parser.add_argument('-q', help='Which queries to run, as a comma-separated string.')
+    parser.add_argument('-f', help='Folder or single .pb query file to read (overrides --plan-source).')
     parser.add_argument(
         "--plan-source",
         choices=PLAN_SOURCES.keys(),
@@ -414,7 +467,7 @@ def main():
         metavar="KEY=VALUE",
         help="Override or add experiment variant metadata; repeatable.",
     )
-    parser.add_argument("--out", default="results/run_query")    # Output
+    parser.add_argument("--out", default=benchmark_defaults.get("out", "results/run_query"))    # Output
     parser.add_argument(
         "--runs",
         type=int,
@@ -429,17 +482,40 @@ def main():
     )
     parser.add_argument(
         "--write-benchmark-results",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=benchmark_defaults.get("write_benchmark_results", True),
         help="Write a timestamped benchmark result directory under benchmarking/.",
     )
-
-
+    # Memory collection uses the PID discovered from the local CU process.
+    # BooleanOptionalAction also permits --no-measure-memory to override YAML true.
+    parser.add_argument('--measure-memory', action=argparse.BooleanOptionalAction,
+                        default=benchmark_defaults.get('measure_memory', False),
+                        help='Collect local CU RSS and integrals beside benchmark results.')
+    parser.add_argument('--memory-source', choices=('auto', 'smaps_rollup', 'status'),
+                        default=benchmark_defaults.get('memory_source', 'auto'),
+                        help='auto pilots smaps_rollup cost and selects one source for the session.')
+    parser.add_argument('--memory-interval-ms', type=float, default=benchmark_defaults.get('memory_interval_ms', 20.0))
+    parser.add_argument('--memory-baseline-ms', type=float, default=benchmark_defaults.get('memory_baseline_ms', 500.0))
+    parser.add_argument('--memory-tail-ms', type=float, default=benchmark_defaults.get('memory_tail_ms', 500.0))
+    parser.add_argument('--memory-max-gap-ms', type=float, default=benchmark_defaults.get('memory_max_gap_ms'),
+                        help='Reject integration across larger sample gaps (default: 5 sampling intervals).')
 
     args = parser.parse_args()
+    # Discover only after parsing, so --help works without a running CU.
+    cu_settings = running_compute_unit()
+    vars(args).update(cu_settings)
     if args.runs < 1:
         parser.error("--runs must be at least 1")
     if args.warmup_runs < 0:
         parser.error("--warmup-runs must not be negative")
+    if args.measure_memory:
+        # Validate settings before connecting or launching a sampling process.
+        for name in ('memory_interval_ms', 'memory_baseline_ms', 'memory_tail_ms'):
+            if not math.isfinite(getattr(args, name)) or getattr(args, name) <= 0:
+                parser.error(f'--{name.replace("_", "-")} must be finite and positive')
+        if args.memory_max_gap_ms is not None and (not math.isfinite(args.memory_max_gap_ms)
+                or args.memory_max_gap_ms < args.memory_interval_ms):
+            parser.error('--memory-max-gap-ms must be finite and at least --memory-interval-ms')
     try:
         variant = dict(benchmark_config.get("variant", {}))
         variant.update(parse_variant_assignments(args.variant))
@@ -456,14 +532,21 @@ def main():
         query_list.extend([query.strip() for query in qs])
     elif args.f:
         path = Path(args.f)
-        if not path.is_dir():
-            parser.error(f"plan folder does not exist: {path}")
-        query_list = [str(path) for path in sorted(path.glob("*.pb"), key=natural_sort_key)]
+        # A single protobuf file permits process restarts without moving plan files.
+        if path.is_file() and path.suffix == ".pb":
+            query_list = [str(path)]
+        elif path.is_dir():
+            query_list = [str(path) for path in sorted(path.glob("*.pb"), key=natural_sort_key)]
+        else:
+            parser.error(f"plan folder or .pb file does not exist: {path}")
     else:
         path = PLAN_SOURCES[args.plan_source]
         if not path.is_dir():
             parser.error(f"named plan source does not exist: {path}")
         query_list = [str(path) for path in sorted(path.glob("*.pb"), key=natural_sort_key)]
+
+    if not query_list:
+        parser.error('no query plans selected')
 
     # Register callbacks (copied from concurrent query_execution_experiment.py - not sure if needed)
     client.register_callback(TcpPackageType.UUID_FOR_UNIT_RESPONSE, update_uuids)
@@ -475,7 +558,7 @@ def main():
     # Extract relevant args
     workers_per_cu = args.workers_per_cu
     scale_factor = args.scale_factor
-    write_benchmark_results_enabled = WRITE_BENCHMARK_RESULTS or args.write_benchmark_results
+    write_benchmark_results_enabled =  args.write_benchmark_results
     benchmark_results: Dict[str, Dict] = {}
     round_results: List[Dict] = []
     benchmark_file: Optional[Path] = None
@@ -489,16 +572,44 @@ def main():
     all_succeeded = True
     EXTENDED_RESULT = True
     RANDOM_PID = True
+    memory = None
+    memory_artifacts = None
+    previous_sigterm = None
     try:
         src_uuid, tgt_uuid = discover_compute_unit(client)
         set_workers_for_compute_units(client, workers_per_cu)
         time.sleep(1.0)
+        if args.measure_memory:
+            assert benchmark_file is not None
+            # Write measurements next to this session's timing JSON for later plotting.
+            memory = MemorySession(args.cu_pid, benchmark_file.parent,
+                source=args.memory_source, interval_ms=args.memory_interval_ms,
+                baseline_ms=args.memory_baseline_ms, tail_ms=args.memory_tail_ms,
+                max_gap_ms=args.memory_max_gap_ms)
+            # Preserve context even if an exception prevents results.json from being written.
+            memory.metadata['benchmark'] = {
+                'execution_mode': args.execution_mode, 'scale_factor': scale_factor,
+                'workers_per_cu': workers_per_cu, 'warmup_rounds': args.warmup_runs,
+                'measured_rounds': args.runs, 'variant': variant, 'config_file': args.config,
+                'query_order': [Path(query).name for query in query_list],
+            }
+            # Ensure SIGTERM also passes through the collector's cleanup path.
+            def terminate_benchmark(signum, frame):
+                raise KeyboardInterrupt('benchmark terminated')
+            previous_sigterm = signal.signal(signal.SIGTERM, terminate_benchmark)
+            # start() waits for the first sample, ensuring future windows are bracketed.
+            memory.start()
 
         for query in query_list:
             benchmark_results[Path(query).name] = {"samples": [], "failures": []}
 
-        def submit(query_msg, plan_id, submitted, send_ends):
+        def submit(query_msg, plan_id, submitted, send_ends, query):
             submitted[plan_id] = time.perf_counter()
+            if memory:
+                # Save the same submission time used by latency measurements.
+                memory.begin_plan(plan_id, Path(query).name,
+                                  round_number if is_warmup else measured_round,
+                                  is_warmup, submitted[plan_id])
             client.send_message(query_msg)
             send_ends.append(time.perf_counter())
 
@@ -508,6 +619,11 @@ def main():
             measured_round = round_number - args.warmup_runs
             label = "warmup" if is_warmup else f"measured round {measured_round}/{args.runs}"
             print(f"\n=== {label} ===")
+            if memory:
+                memory.check()
+                if round_number == args.warmup_runs + 1:
+                    # Measure the reference once; later rounds must retain memory drift.
+                    memory.baseline()
 
             with complete_condition:
                 completed.clear()
@@ -540,7 +656,7 @@ def main():
 
             if args.execution_mode == "concurrent":
                 for query, query_msg, plan in prepared:
-                    submit(query_msg, plan.planid, submitted, send_ends)
+                    submit(query_msg, plan.planid, submitted, send_ends, query)
 
             # Responses can arrive in any order; their arrival times are captured
             # by the receiver, independently of the order in which we collect them.
@@ -548,9 +664,12 @@ def main():
                 print(query)
                 plan_id = query_plan.planid
                 if args.execution_mode == "sequential":
-                    submit(query_msg, plan_id, submitted, send_ends)
+                    submit(query_msg, plan_id, submitted, send_ends, query)
                 remaining = max(0.0, submitted[plan_id] + 300.0 - time.perf_counter())
                 plan_response, arrived = wait_next_completion(client, plan_id, timeout=remaining)
+                if memory:
+                    # Use receiver arrival time, not this loop's response-processing order.
+                    memory.complete_plan(plan_response, arrived)
                 total_response_time = arrived - submitted[plan_id]
                 print(f"Total response time: {total_response_time} seconds")
 
@@ -580,6 +699,9 @@ def main():
                         "submission_offset": submitted[plan_id] - round_start,
                     })
                     samples_by_plan[plan_id] = benchmark_results[Path(query).name]["samples"][-1]
+                    if memory:
+                        # Randomized plan IDs link a timing sample to its memory window.
+                        samples_by_plan[plan_id]['plan_id'] = plan_id
                     print(plan_response.info)
 
             extended = [item for response, _ in completed.values()
@@ -587,6 +709,10 @@ def main():
             first_start = min(item.start for item in extended)
             last_end = max(item.end for item in extended)
             arrivals = [arrived for _, arrived in completed.values()]
+            if memory:
+                # Warmup and measured rounds each start at 1; the warmup flag disambiguates.
+                memory.complete_round(round_number if is_warmup else measured_round,
+                                      is_warmup, round_start, max(arrivals))
             if not is_warmup:
                 # All durations/offsets are seconds. Server offsets use the
                 # earliest operator start in this round as their origin.
@@ -607,14 +733,25 @@ def main():
             result["summary"] = summarize(result["samples"])
 
     finally:
-        client.disconnect()
+        try:
+            if memory:
+                error = sys.exc_info()[1]
+                # Keep partial numeric artifacts on errors, then let the original error propagate.
+                memory_artifacts = memory.finish(
+                    benchmark_error=f'{type(error).__name__}: {error}' if error else None)
+                print(f'Memory artifacts written to {benchmark_file.parent}')
+        finally:
+            if previous_sigterm is not None:
+                signal.signal(signal.SIGTERM, previous_sigterm)
+            client.disconnect()
 
     if write_benchmark_results_enabled:
         assert benchmark_file is not None
-        write_benchmark_results(benchmark_file, {
+        results = {
             "metadata": {
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "host": platform.node(),
+                "compute_unit": cu_settings,
                 "workers_per_cu": workers_per_cu,
                 "scale_factor": scale_factor,
                 "warmup_rounds": args.warmup_runs,
@@ -631,11 +768,17 @@ def main():
             },
             "rounds": round_results,
             "queries": benchmark_results,
-        })
+        }
+        if memory_artifacts is not None:
+            # Link raw collection files only; plotting is an independent command.
+            results['memory'] = memory_artifacts
+        write_benchmark_results(benchmark_file, results)
         print(f"Benchmark results written to {benchmark_file}")
 
     if not all_succeeded:
         sys.exit(1)
+    if memory_artifacts and memory_artifacts['errors']:
+        raise RuntimeError(f'Memory collection failed: {memory_artifacts["errors"]}')
 
 if __name__ == "__main__":
     main()
