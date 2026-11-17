@@ -88,8 +88,13 @@ python3 scripts/benchmark_plotting/plot_memory.py /path/to/benchmark-session
 The input may also be that session's `results.json` or `memory_summary.json`.
 The command reads `memory_samples.csv` and `memory_summary.json` without changing
 them. It writes `memory.png` and a source-fingerprinted `manifest.json` into a
-new batch under `benchmarking/plots/memory/`. Use `--output-dir PATH` to choose
+new batch under `benchmarking/plots/memory/`, named
+`<timestamp>_<mode>_<variant>_sf<N>_<run timestamp>` (for example
+`..._sequential_mat-join_sf50_2026-11-16T23-33-25Z`). Use `--output-dir PATH` to choose
 another output parent. Regenerating a plot creates a new batch.
+
+A `--memtrack` run also leaves `memtrack_events.csv` next to `results.json`; the raw
+`<mode>-sf<N>-memtrack.bin` files stay in `benchmarking/logs/memtrack-batch-<timestamp>/`.
 
 The top panel shows whole-CU RSS, its fixed baseline, and round boundaries.
 The lower panel shows plan intervals per query and clock-aligned operator

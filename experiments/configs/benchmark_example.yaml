@@ -4,7 +4,7 @@
 plan_source: plans
 
 benchmark:
-  execution_mode: sequential  # sequential or concurrent
+  execution_mode: concurrent  # sequential or concurrent
   runs: 1
   warmup_runs: 0
   write_benchmark_results: true  # --write-benchmark-results / --no-write-benchmark-results

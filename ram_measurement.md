@@ -6,7 +6,7 @@ Status: Phase 1 implemented as optional collection in `experiments/run_query.py`
 
 - Compare RAM consumption after changes to query plans and operator implementations.
 - Help explain query-specific timing spikes and uneven optimization benefits in `benchmarking/`.
-- Coordinate collection through `experiments/run_query.py`; support `experiments/run_benchmark_batches.sh`.
+- Coordinate collection through `experiments/run_query.py`; support `scripts/run_benchmark_batches.sh`.
 - Measure the C++ compute unit (CU) on its host. Support both sequential and concurrent execution from the beginning.
 
 ## Phase 1 usage and outputs
@@ -16,7 +16,7 @@ Rebuild CU and regenerate Python protobufs for the additive clock-anchor/identit
 ```bash
 bash generate_python_proto.sh
 cmake --build build --target computeUnit -j2
-bash experiments/run_benchmark_batches.sh
+bash scripts/run_benchmark_batches.sh
 ```
 
 Configure collection with `benchmark.measure_memory` and the `memory_*` settings in `experiments/configs/benchmark_example.yaml`; the batch script takes no arguments. For an already-running local CU, run `run_query.py` with the same YAML defaults (or override memory settings via its CLI). The runner discovers the CU PID and launch settings automatically; the response PID/hostname must match the sampled process. The batch loop selects execution mode and starts the CU with each dataset scale. Existing timing results remain compatible.

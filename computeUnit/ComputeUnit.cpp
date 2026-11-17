@@ -76,7 +76,7 @@ int main(int argc, char** argv) {
     // Memory tracking log: file written on FLUSH_MEMORY_LOG, number of events it can hold between two flushes
     const std::string memLogPath = parser.takeParseArg<std::string>("-memlog", "[Info] No memory log path given. Set with [-memlog]. Default: [memtrack.bin].", "memtrack.bin", false);
     const size_t memLogCapacity = parser.takeParseArg<size_t>("-memlogcap", "[Info] No memory log capacity given. Set with [-memlogcap] (events). Default: [262144].", 262144, false);
-    memtrack::init(memLogCapacity);
+    memtrack::init(memLogCapacity, memLogPath);
 #endif
 
     if (pathToData.size() > 0) {
@@ -342,8 +342,9 @@ int main(int argc, char** argv) {
             response = "[" + prettyName + "] Catalog cleared.";
 #ifdef RAM_TRACKING
         } else if (ci.type() == ddd::config::FLUSH_MEMORY_LOG) {
-            const bool ok = memtrack::flush(memLogPath);
-            response = "[" + prettyName + "] Memory log " + (ok ? "flushed to " + memLogPath + "." : "flush FAILED.");
+            // The sequence number lets the runner tell this reply from a late duplicate of an earlier one.
+            const uint64_t seq = memtrack::flush();
+            response = "[" + prettyName + "] Memory log " + (seq ? "flushed to " + memLogPath + " (flush #" + std::to_string(seq) + ")" : std::string("flush FAILED"));
 #endif
         } else {
             LOG_ERROR("I received a strange configuration action.";)

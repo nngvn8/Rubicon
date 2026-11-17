@@ -49,6 +49,18 @@ struct Event {
 };
 static_assert(sizeof(Event) == 32, "Event is written to disk as is, keep its layout stable");
 
+// First 32 bytes of the log file, followed by the raw Event records.
+struct FileHeader {
+    char magic[8];       // "RUBIMEM1"
+    uint32_t version;
+    uint32_t eventSize;  // sizeof(Event), lets the reader reject a different layout
+    uint64_t capacity;   // slots of the in-memory log
+    uint64_t startNs;    // CLOCK_MONOTONIC at init()
+};
+static_assert(sizeof(FileHeader) == 32, "FileHeader is written to disk as is");
+inline constexpr char kMagic[8] = {'R', 'U', 'B', 'I', 'M', 'E', 'M', '1'};
+inline constexpr uint32_t kFileVersion = 1;
+
 // Per-thread state. Reset by OperatorScope at the start and end of every operator.
 struct ThreadCtx {
     Owner owner;                   // operator currently running on this thread
@@ -68,13 +80,15 @@ constexpr int64_t kTempDelta = 8 << 20;  // 8 MiB
 // ---------------------------------------------------------------------------------------------
 
 // Allocate and pre-touch the log once at CU start, so it is part of the baseline RSS and never grows.
-void init(size_t capacity);
+// Also creates (truncates) the log file at `path` and writes its header.
+void init(size_t capacity, const std::string& path);
 
 // Append one event (lock-free). If the log is full the event is dropped and counted.
 void record(Owner o, int64_t value, Kind k = Kind::Delta);
 
-// Append the new events to the file at `path` and make room for further ones. Call between rounds.
-bool flush(const std::string& path);
+// Append the new events to the log file and make room for further ones. Call between rounds.
+// Returns the running number of this flush (1, 2, ...), or 0 on failure.
+uint64_t flush();
 
 // ---------------------------------------------------------------------------------------------
 // Hooks for outputs (buffers that outlive the operator)
@@ -205,8 +219,8 @@ class OperatorScope {
 #else  // RAM_TRACKING off: everything compiles to nothing
 
 struct Owner {};
-inline void init(size_t) {}
-inline bool flush(const std::string&) { return false; }
+inline void init(size_t, const std::string&) {}
+inline uint64_t flush() { return 0; }
 inline Owner currentOwner() { return {}; }
 inline void onAlloc(const void*, size_t) {}
 inline void onShrink(const void*, const void*, size_t) {}

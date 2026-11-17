@@ -179,12 +179,14 @@ SINGLE_CPU_EXEC (compile-time alternative, no pool):
 
 ### Flush in detail
 
-- `flush(path)` runs only on the config action `FLUSH_MEMORY_LOG`. The target file is set by the CU option `-memlog` (default `memtrack.bin`). Nothing sends the action yet: the Python runner has to send it after each round, and the Python protos have to be regenerated.
-- `record` writes only into the in-memory buffer. `flush` appends the new events to the file (`"ab"`), so all flushes of a run end up in one file.
+- `flush()` runs only on the config action `FLUSH_MEMORY_LOG`. The file is set by the CU option `-memlog` (default `memtrack.bin`) and is created (truncated) with a header in `init`, so one CU process = one file. Nothing sends the action yet: the Python runner has to send it after each round, and the Python protos have to be regenerated.
+- The reply text carries a running flush number (`flushed to <path> (flush #N)`), `flush FAILED` on error. The runner uses `N` to tell a reply from a late duplicate of an earlier one (the CU sends every text reply twice).
+- `record` writes only into the in-memory buffer. `flush` appends the new events to the file (`"ab"`) after the header that `init` wrote.
 - `flushed` is the number of slots from the start of the buffer that are already in the file. `next` is the number of slots handed out so far.
 - After writing, the buffer is reset to slot 0 with a compare-and-swap on `next`. If a writer was active in between, for example late frees from `dropTable` after the response, the reset is skipped and the next flush writes the rest.
 - If more events arrive than the capacity allows, the surplus is lost. `flush` then appends one `Dropped` event with the number lost, and the offline analysis must check for it.
-- The file is a raw array of 32-byte `Event` structs (`t_ns`, `plan`, `item`, `value`, `kind`) with no header.
+- The file is a 32-byte header (`magic "RUBIMEM1"`, `version`, `eventSize`, `capacity`, `startNs`) followed by a raw array of 32-byte `Event` structs (`t_ns`, `plan`, `item`, `value`, `kind`). The reader rejects a file whose magic, version or `eventSize` does not match.
+- A CU process that serves several runner sessions keeps appending to the same file. The runner therefore drops all events older than its own session start (same clock, `CLOCK_MONOTONIC`).
 
 ### Personal notes and Understanding
 - One Thread Context (ThreadCtc) object per thread
@@ -453,6 +455,219 @@ void flush(FILE* f) {      // end of a round: no operator is running
 ```
 
 
+
+## 9. Python side: design draft (not implemented)
+
+Scope: only `experiments/run_query.py` and `utils/memory.py` use the tracking. The other experiment scripts stay untouched. Decisions: the derived data goes into the existing `memory_summary.json` (next to `results.json`, one per run directory), the raw events go next to it as CSV like the RSS samples.
+
+### Data flow
+
+```
+CU (RAM_TRACKING)                          runner (run_query.py)                       run directory
+ events in RAM  --FLUSH_MEMORY_LOG-->  wait for the ack "flush #N"  -->  CU's -memlog file (header + events)
+ ExtendedResult (faults, allocs, bytes) --PlanResponse--> MemorySession.complete_plan
+                                           MemorySession.finish: read the file, drop events older than the session
+                                             -> memtrack_events.csv   (raw, converted)
+                                             -> memory_summary.json   (+ key "operator_tracking")
+                                             -> results.json          (existing pointer only)
+```
+
+### File structure
+
+```
+experiments/
+  start_rubi_cu.sh            + -memlog <path> [-memlogcap <n>]
+  run_query.py                + --memtrack flag, flush after each round, early HasField check
+  proto/*_pb2.py              regenerated with generate_python_proto.sh
+  utils/
+    util.py                   unchanged (create_configuration_item already works for FLUSH_MEMORY_LOG)
+    memory.py                 MemorySession: memlog path, ack-based flush_cu_log(), extra native_operators fields, merge into summary
+    memtrack.py               NEW: read events, derive per-operator numbers and per-plan timeline
+  tests/
+    test_memtrack.py          NEW: synthetic event streams (peak, integral, free-to-zero, dropped)
+benchmarking/data/<variant>/<mode>/<run>/
+  results.json                unchanged (+ existing results['memory'] pointer)
+  memory_summary.json         + "operator_tracking"
+  memory_samples.csv          existing RSS samples
+  memtrack_events.csv         NEW: raw events (t_ns,plan,item,kind,value)
+```
+
+### `run_query.py` (draft)
+
+```python
+parser.add_argument('--memtrack', action=argparse.BooleanOptionalAction,
+                    default=benchmark_defaults.get('memtrack', False),
+                    help='Per-operator memory tracking; needs --measure-memory and a CU built with RAM_TRACKING.')
+parser.add_argument('--memlog', default=benchmark_defaults.get('memlog', 'memtrack.bin'),
+                    help='Same value as the CU flag -memlog (relative to the CU working directory).')
+
+# after memory.start():
+if args.memtrack:
+    memory.enable_tracking(args.memlog, client, src_uuid, tgt_uuid)   # resolves the path, registers the reply callback once
+
+# after memory.complete_round(...):
+if args.memtrack:
+    memory.flush_cu_log()
+```
+
+### `memory.py` (draft)
+
+```python
+# MemorySession
+def enable_tracking(self, memlog: str, client, src_uuid, tgt_uuid):
+    # The CU runs on this host (checked via computeUnitHost), so its cwd tells where the relative path lands.
+    self.memlog_path = Path(f'/proc/{self.pid}/cwd').resolve() / memlog
+    self.tracking = True
+    self.session_start_ns = time.perf_counter_ns()      # events older than this belong to an earlier session
+    self._client, self._src, self._tgt = client, src_uuid, tgt_uuid
+    self._cond = threading.Condition()                  # guards the two fields below
+    self._latest_flush = 0                              # highest "flush #N" seen in a CU reply
+    self._flush_failed = False
+    client.register_callback(TcpPackageType.TEXT, self._on_cu_text)   # once; replaces the default print handler
+
+def _on_cu_text(self, message):
+    """Runs on the client's receiver thread whenever a TEXT message arrives, independent of flush_cu_log."""
+    text = message.payload.decode()
+    print(f'Received Text: {text}')
+    found = re.search(r'flushed to .* \(flush #(\d+)\)', text)
+    with self._cond:
+        if found:
+            self._latest_flush = max(self._latest_flush, int(found[1]))
+        elif 'flush FAILED' in text:
+            self._flush_failed = True
+        self._cond.notify_all()                         # wake up flush_cu_log
+
+def flush_cu_log(self, timeout=30):
+    with self._cond:
+        floor = self._latest_flush                      # a reply only counts if it is newer than this
+        self._flush_failed = False
+    self._client.send_message(util.create_configuration_item(
+        source_uuid=self._src, target_uuid=self._tgt,
+        type=ConfigurationRequests.ConfigType.FLUSH_MEMORY_LOG))
+    with self._cond:
+        # wait_for is the "while not arrived: wait" loop; the receiver thread notifies on every TEXT message.
+        # Late duplicates of an earlier reply carry the old number, so they do not satisfy the condition.
+        answered = self._cond.wait_for(lambda: self._latest_flush > floor or self._flush_failed, timeout)
+    if not answered:
+        self.metadata['errors'].append('FLUSH_MEMORY_LOG not acknowledged (CU without RAM_TRACKING?)')
+    elif self._flush_failed:
+        self.metadata['errors'].append('CU reported: memory log flush failed')
+
+# complete_plan: extra fields per operator (unset when the CU has no tracking)
+if self.tracking and any(not i.HasField('minorFaults') for i in response.extendedResults):
+    raise RuntimeError('--memtrack set, but the CU sends no tracking data: build it with -DRAM_TRACKING=ON')
+window['native_operators'] = [{
+    'operator_id': i.itemId, 'start': i.start, 'end': i.end, 'row_count': i.rowCount,
+    'minor_faults': i.minorFaults if i.HasField('minorFaults') else None,
+    'allocation_count': i.allocationCount if i.HasField('allocationCount') else None,
+    'requested_bytes': i.requestedBytes if i.HasField('requestedBytes') else None,
+} for i in response.extendedResults]
+
+# finish(): after the tail wait, one more flush for the late frees, then
+if self.tracking:
+    self.flush_cu_log()
+    events = memtrack.load_events(self.memlog_path, since_ns=self.session_start_ns)
+    memtrack.write_csv(events, self.directory / 'memtrack_events.csv')
+    document['operator_tracking'] = memtrack.derive(events, self.plans)
+document['interpretation'] = (
+    'windows/operators: whole-CU RSS, integrals of overlapping intervals are not additive. '
+    'operator_tracking: requested capacity attributed to the producing operator (virtual, not RSS).')
+```
+
+How the wait works: `send_message` returns at once. The reply arrives later on the client's receiver thread, which calls `_on_cu_text`; that is the only code that sees the message. The condition variable is the handoff: `flush_cu_log` sleeps in `wait_for` until the receiver thread has updated `_latest_flush` and called `notify_all`, or until the timeout. Nothing polls, and no state needs resetting between calls because `_latest_flush` only grows. The callback is registered once because it is not tied to a call; it handles every TEXT message for the whole session.
+
+### `memtrack.py` (draft)
+
+```python
+import csv, struct
+from collections import defaultdict
+from pathlib import Path
+
+EVENT = struct.Struct('<QIIqB7x')              # t_ns, plan, item, value, kind (32 bytes, see MemTracker.hpp)
+HEADER = struct.Struct('<8sIIQQ')              # magic, version, event_size, capacity, start_ns (32 bytes)
+MAGIC, VERSION = b'RUBIMEM1', 1
+DELTA, TEMP, DROPPED = 0, 1, 2
+MIB = 1024 ** 2
+
+def load_events(path, since_ns=0):
+    data = Path(path).read_bytes()
+    magic, version, event_size, _capacity, _start = HEADER.unpack_from(data)
+    if magic != MAGIC or version != VERSION or event_size != EVENT.size:
+        raise ValueError(f'{path}: not a memtrack log of this layout')
+    body = data[HEADER.size:]
+    body = body[:len(body) - len(body) % EVENT.size]   # ignore a torn last record
+    # A CU process may serve several sessions; same clock, so older events are simply skipped.
+    return [e for e in EVENT.iter_unpack(body) if e[0] >= since_ns]
+
+def write_csv(events, path):
+    with open(path, 'w', newline='') as f:
+        w = csv.writer(f)
+        w.writerow(['t_ns', 'plan', 'item', 'value', 'kind'])
+        w.writerows(events)
+
+def level_steps(delta, temp):
+    """Step function of one operator: cumulative output bytes + current temp level."""
+    times = sorted({t for t, _ in delta} | {t for t, _ in temp})
+    d, tmp, i, j, out = 0, 0, 0, 0, []
+    for t in times:
+        while i < len(delta) and delta[i][0] <= t: d += delta[i][1]; i += 1
+        while j < len(temp) and temp[j][0] <= t: tmp = temp[j][1]; j += 1
+        out.append((t, d + tmp, d))                     # (time, total, outputs only)
+    return out
+
+def derive(events, plans):
+    dropped = sum(v for _, _, _, v, k in events if k == DROPPED)
+    owners = defaultdict(lambda: {'delta': [], 'temp': []})
+    for t, plan, item, value, kind in events:
+        if kind == DELTA: owners[(plan, item)]['delta'].append((t, value))
+        elif kind == TEMP: owners[(plan, item)]['temp'].append((t, value))
+    operators, per_plan = [], defaultdict(list)
+    for (plan, item), o in owners.items():
+        steps = level_steps(sorted(o['delta']), sorted(o['temp']))
+        if not steps: continue
+        # Operator interval = first and last temp snapshot, so no clock alignment is needed.
+        start = o['temp'][0][0] if o['temp'] else steps[0][0]
+        end = max(t for t, _ in o['temp']) if o['temp'] else steps[0][0]
+        area = sum(a[1] * (b[0] - a[0]) for a, b in zip(steps, steps[1:])) / 1e9   # step function: the level is exact between events, no interpolation
+        operators.append({
+            'plan_id': plan, 'item': item, 'start_ns': start, 'end_ns': end,
+            'peak_bytes': max(s[1] for s in steps),
+            'integral_mib_seconds': area / MIB,
+            'retained_bytes': max((s[2] for s in steps if s[0] <= end), default=0),   # outputs when the operator ended
+            'live_bytes_at_plan_end': steps[-1][2],     # output bytes of this operator still live after its last event; 0 once freed
+        })
+        per_plan[plan].append(steps)
+    return {'events': len(events), 'events_dropped': dropped,
+            'operators': sorted(operators, key=lambda r: (r['plan_id'], r['item'])),
+            'plans': [plan_timeline(p, s) for p, s in per_plan.items()]}
+
+def plan_timeline(plan, step_lists, max_points=2000):
+    """Sum of all operators of one plan over time (virtual capacity), thinned for plotting."""
+    ...   # merge the step lists on time, keep at most max_points points
+```
+
+### `memory_summary.json` outline (new key only)
+
+```json
+"operator_tracking": {
+  "events": 18234, "events_dropped": 0,
+  "operators": [
+    {"plan_id": 123, "item": 7, "start_ns": 0, "end_ns": 0,
+     "peak_bytes": 0, "integral_mib_seconds": 0.0,
+     "retained_bytes": 0, "live_bytes_at_plan_end": 0}
+  ],
+  "plans": [{"plan_id": 123, "timeline": [[t_ns, bytes]]}]
+}
+```
+
+The touched/requested numbers stay in `windows[].native_operators` (`minor_faults`, `allocation_count`, `requested_bytes`). Merging by `(plan_id, operator_id)` is done offline in the plotting code.
+
+### Checks the runner must do
+
+- First plan response without `minorFaults` while `--memtrack` is set: abort with "CU not built with RAM_TRACKING".
+- `events_dropped > 0`: mark the run invalid, increase `-memlogcap`.
+- `live_bytes_at_plan_end != 0` for a plan whose table was dropped: accounting bug or a flush before the late frees, report it.
+- Run `--memtrack` and a normal run separately for the overhead comparison (section 7).
 
 ## Glossary
 

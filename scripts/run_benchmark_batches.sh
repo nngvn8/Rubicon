@@ -5,7 +5,7 @@ set -uo pipefail
 readonly IP="127.0.0.1"
 readonly PORT=23233
 # Runner settings, including memory measurement, come from benchmark_example.yaml.
-# Example: bash experiments/run_benchmark_batches.sh
+# Example: bash scripts/run_benchmark_batches.sh
 if [[ $# -ne 0 ]]; then
     echo "This script takes no arguments; configure experiments/configs/benchmark_example.yaml." >&2
     exit 2

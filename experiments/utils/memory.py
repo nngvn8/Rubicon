@@ -12,8 +12,14 @@ import math
 import multiprocessing as mp
 import os
 from pathlib import Path
+import re
 import statistics
+import threading
 import time
+
+from proto import ConfigurationRequests_pb2 as ConfigurationRequests
+from proto.UnitDefinition_pb2 import TcpPackageType
+from utils import memtrack, util
 
 MIB = 1024 ** 2
 
@@ -255,6 +261,52 @@ class MemorySession:
         self._child_pipe = child
         self.started = False
         self.finalized = False
+        self.tracking = False
+
+    def enable_tracking(self, memlog: str, client, src_uuid: int, tgt_uuid: int):
+        """Collect the CU's per-operator memory log (CU built with RAM_TRACKING, started with -memlog)."""
+        # The CU runs on this host (checked via computeUnitHost), so its cwd tells where a relative path lands.
+        self.memlog_path = Path(f'/proc/{self.pid}/cwd').resolve() / memlog
+        self.tracking = True
+        # Events older than this belong to an earlier session of the same CU process.
+        self.session_start_ns = time.perf_counter_ns()
+        self._client, self._src, self._tgt = client, src_uuid, tgt_uuid
+        self._cond = threading.Condition()  # guards the two fields below
+        self._latest_flush = 0              # highest "flush #N" seen in a CU reply
+        self._flush_failed = False
+        self.metadata['memtrack_log'] = str(self.memlog_path)
+        # Registered once: it handles every TEXT message of the session and replaces the default print handler.
+        client.register_callback(TcpPackageType.TEXT, self._on_cu_text)
+
+    def _on_cu_text(self, message):
+        """Runs on the client's receiver thread for every TEXT message, independent of flush_cu_log."""
+        text = message.payload.decode()
+        print(f'Received Text: {text}')
+        found = re.search(r'flushed to .* \(flush #(\d+)\)', text)
+        with self._cond:
+            if found:
+                self._latest_flush = max(self._latest_flush, int(found[1]))
+            elif 'flush FAILED' in text:
+                self._flush_failed = True
+            self._cond.notify_all()  # wake up flush_cu_log
+
+    def flush_cu_log(self, timeout=30):
+        """Ask the CU to write its event log and wait for the acknowledgement."""
+        with self._cond:
+            floor = self._latest_flush  # only a reply with a higher number answers this request
+            self._flush_failed = False
+        self._client.send_message(util.create_configuration_item(
+            source_uuid=self._src, target_uuid=self._tgt,
+            type=ConfigurationRequests.ConfigType.FLUSH_MEMORY_LOG))
+        with self._cond:
+            # The CU answers every request twice; a late duplicate of an older reply keeps its old number.
+            answered = self._cond.wait_for(
+                lambda: self._latest_flush > floor or self._flush_failed, timeout)
+            failed = self._flush_failed
+        if not answered:
+            self.metadata['errors'].append('FLUSH_MEMORY_LOG not acknowledged (CU without RAM_TRACKING?)')
+        elif failed:
+            self.metadata['errors'].append('CU reported: memory log flush failed')
 
     def start(self):
         """Wait for a usable first sample before submitting any measured work."""
@@ -321,9 +373,15 @@ class MemorySession:
             raise RuntimeError('response CU identity does not match the sampled local CU PID/host')
         window = self.plans[response.planId]
         window.update(end_ns=int(arrived * 1e9), success=response.info == 'Plan completed successfully.')
+        if self.tracking and any(not i.HasField('minorFaults') for i in response.extendedResults):
+            raise RuntimeError('--memtrack is set, but the CU sends no tracking data: build it with -DRAM_TRACKING=ON')
         # Preserve original timings even when their clock mapping must be rejected.
-        window['native_operators'] = [{'operator_id': i.itemId, 'start': i.start, 'end': i.end,
-                                       'row_count': i.rowCount} for i in response.extendedResults]
+        window['native_operators'] = [{
+            'operator_id': i.itemId, 'start': i.start, 'end': i.end, 'row_count': i.rowCount,
+            'minor_faults': i.minorFaults if i.HasField('minorFaults') else None,
+            'allocation_count': i.allocationCount if i.HasField('allocationCount') else None,
+            'requested_bytes': i.requestedBytes if i.HasField('requestedBytes') else None,
+        } for i in response.extendedResults]
         operators, reason = aligned_operators(response, window['start_ns'] / 1e9, arrived)
         window['operator_alignment_error'] = reason
         for operator in operators:
@@ -360,6 +418,15 @@ class MemorySession:
         finally:
             # Request shutdown even when another interrupt arrives during the tail.
             self.stop_event.set()
+        tracking_events = None
+        if self.tracking:
+            # After the tail, so the frees of dropTable are in the log too.
+            try:
+                self.flush_cu_log(timeout=10)
+                tracking_events = memtrack.load_events(self.memlog_path, since_ns=self.session_start_ns)
+                memtrack.write_csv(tracking_events, self.directory / 'memtrack_events.csv')
+            except Exception as error:  # keep the RSS results even if tracking fails
+                self.metadata['errors'].append(f'memtrack: {type(error).__name__}: {error}')
         if self.started:
             self.process.join(timeout=5)
             if self.process.is_alive():
@@ -402,7 +469,11 @@ class MemorySession:
                 operator['memory'] = integrate(samples, operator['start_ns'], operator['end_ns'],
                                                baseline, self.max_gap_ns, times)
         document = {'metadata': self.metadata, 'windows': self.windows, 'operators': self.operators,
-                    'interpretation': 'Whole-CU RSS during intervals; not memory owned by a plan/operator. Overlapping integrals are not additive.'}
+                    'interpretation': 'windows/operators: whole-CU RSS during intervals, overlapping integrals are not additive. '
+                                      'operator_tracking: requested capacity attributed to the producing operator (virtual, not RSS).'}
+        if tracking_events is not None:
+            document['operator_tracking'] = memtrack.derive(tracking_events, self.plans)
+            self.metadata['memtrack_events_dropped'] = document['operator_tracking']['events_dropped']
         summary = self.directory / 'memory_summary.json'
         # Collection exports data only; plots can be regenerated separately later.
         summary.write_text(json.dumps(document, indent=2, allow_nan=False) + '\n')

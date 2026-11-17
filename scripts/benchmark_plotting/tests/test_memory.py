@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from plot_memory import MIB, export_memory, load_memory, render_memory
+from plot_memory import MIB, batch_description, export_memory, load_memory, render_memory
 import matplotlib.pyplot as plt
 
 
@@ -57,6 +57,16 @@ class MemoryPlotTests(unittest.TestCase):
         second = export_memory(self.summary_path, self.root / 'plots')
         self.assertNotEqual(output, second)
         self.assertTrue((output / 'memory.png').exists())
+
+    def test_batch_name_identifies_mode_variant_scale_and_run(self):
+        benchmark = {'execution_mode': 'sequential', 'scale_factor': 50,
+                     'variant': {'materialize_into_join': True}}
+        run = '2026-11-16T23-33-25Z_sf-50_runs-20_workers-48'
+        self.assertEqual(batch_description({'metadata': {'benchmark': benchmark}}, run),
+                         'sequential_mat-join_sf50_2026-11-16T23-33-25Z')
+        self.assertEqual(batch_description({'metadata': {}}, run), '2026-11-16T23-33-25Z')
+        output = export_memory(self.session, self.root / 'plots')
+        self.assertEqual(output.name.split('_', 1)[1], 'session')
 
     def test_memory_values_and_operator_intervals_share_time_origin(self):
         samples, summary, _ = load_memory(self.session)

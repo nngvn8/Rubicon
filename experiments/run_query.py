@@ -498,6 +498,11 @@ def main():
     parser.add_argument('--memory-tail-ms', type=float, default=benchmark_defaults.get('memory_tail_ms', 500.0))
     parser.add_argument('--memory-max-gap-ms', type=float, default=benchmark_defaults.get('memory_max_gap_ms'),
                         help='Reject integration across larger sample gaps (default: 5 sampling intervals).')
+    parser.add_argument('--memtrack', action=argparse.BooleanOptionalAction,
+                        default=benchmark_defaults.get('memtrack', False),
+                        help='Per-operator memory tracking; needs --measure-memory and a CU built with RAM_TRACKING.')
+    parser.add_argument('--memlog', default=benchmark_defaults.get('memlog', 'memtrack.bin'),
+                        help='Value of the CU flag -memlog (relative paths are relative to the CU working directory).')
 
     args = parser.parse_args()
     # Discover only after parsing, so --help works without a running CU.
@@ -507,6 +512,8 @@ def main():
         parser.error("--runs must be at least 1")
     if args.warmup_runs < 0:
         parser.error("--warmup-runs must not be negative")
+    if args.memtrack and not args.measure_memory:
+        parser.error('--memtrack requires --measure-memory')
     if args.measure_memory:
         # Validate settings before connecting or launching a sampling process.
         for name in ('memory_interval_ms', 'memory_baseline_ms', 'memory_tail_ms'):
@@ -598,7 +605,8 @@ def main():
             previous_sigterm = signal.signal(signal.SIGTERM, terminate_benchmark)
             # start() waits for the first sample, ensuring future windows are bracketed.
             memory.start()
-
+            if args.memtrack:
+                memory.enable_tracking(args.memlog, client, src_uuid, tgt_uuid)
         for query in query_list:
             benchmark_results[Path(query).name] = {"samples": [], "failures": []}
 
@@ -712,6 +720,9 @@ def main():
                 # Warmup and measured rounds each start at 1; the warmup flag disambiguates.
                 memory.complete_round(round_number if is_warmup else measured_round,
                                       is_warmup, round_start, max(arrivals))
+                if args.memtrack:
+                    # The late frees of dropTable may land in the next flush; finish() flushes once more.
+                    memory.flush_cu_log()
             if not is_warmup:
                 # All durations/offsets are seconds. Server offsets use the
                 # earliest operator start in this round as their origin.
