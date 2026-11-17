@@ -467,7 +467,6 @@ def main():
         metavar="KEY=VALUE",
         help="Override or add experiment variant metadata; repeatable.",
     )
-    parser.add_argument("--out", default=benchmark_defaults.get("out", "results/run_query"))    # Output
     parser.add_argument(
         "--runs",
         type=int,

@@ -49,7 +49,7 @@ Configuration options:
 - `queries_per_page`: distribution/round panels per page; defaults to 6.
 - `change_queries_per_page`: queries per change chart; defaults to 13
   (13 horizontal intervals).
-- `output_dir`: fixed to the repository’s `benchmarking/plots/benchmark-comparisons`; batches are written beneath `batches/`. Omit this field to use that location regardless of where the config lives.
+- `output_dir`: fixed to the repository’s `benchmarking/plots/runtime`; batches are written directly beneath it. Omit this field to use that location regardless of where the config lives.
 - `baseline.id` / `comparison.id`: optional short comparison identifiers.
 - `name`: optional batch-description override, replacing the derived comparison name.
   Overrides accept filename characters only, without directory separators.
@@ -193,19 +193,18 @@ threshold is deliberately not applied to this invariant check.
 ## Output batches and static index
 
 ```text
-benchmarking/plots/benchmark-comparisons/
+benchmarking/plots/runtime/
     index.html
-    batches/
-        2026-10-30T14-32-08Z_baseline__vs__mat-join/
-            manifest.json
-            change/
-            rounds/
-            metric_comparison.png
-            metric_relationships.png
-            duration_exceedance.png
+    2026-10-30T14-32-08Z_baseline__vs__mat-join/
+        manifest.json
+        change/
+        rounds/
+        metric_comparison.png
+        metric_relationships.png
+        duration_exceedance.png
 ```
 
-Each invocation publishes a fresh batch directly under `batches/`. No directory
+Each invocation publishes a fresh batch directly under `plots/runtime/`. No directory
 levels are added for workers, scale factor, optimizations, or execution mode.
 Timestamps are UTC; collisions get numbered suffixes. Input metadata supplies
 compact comparison names (`baseline`, `mat-join`, `mat-join-group`), with optional
@@ -223,16 +222,6 @@ Plotting automatically rebuilds `index.html`. To rebuild without plotting:
 ```bash
 python3 scripts/benchmark_plotting/index.py
 ```
-
-To migrate legacy nested batches into the flat structure and rebuild:
-
-```bash
-python3 scripts/benchmark_plotting/index.py --migrate
-```
-
-Migration moves completed batches, preserving image bytes, manifests, and batch
-IDs; it removes only empty old hierarchy directories. Existing images are not
-rewritten, so historical captions may refer to the former metadata sheet.
 
 Open the index as a static HTML page in your browser. It embeds its manifest
 snapshot, filtering code, and styles: no Python server, database, network requests,
@@ -454,5 +443,5 @@ individual comparisons reproducible. The underlying input fingerprints and code
 fingerprints are recorded in each plotting batch's manifest. Individual bootstrap
 draws are not retained: the CSV contains the observed median changes and interval
 endpoints. The linked overview is saved under
-`benchmarking/plots/benchmark-comparisons/bootstrap-reports/<run-id>/index.html`.
+`benchmarking/plots/runtime/bootstrap-reports/<run-id>/index.html`.
 The driver prints both locations when complete.

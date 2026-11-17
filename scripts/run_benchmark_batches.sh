@@ -11,7 +11,7 @@ if [[ $# -ne 0 ]]; then
     exit 2
 fi
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-logs="$(pwd)/benchmarking/in-batches-$(date +%Y%m%d-%H%M%S)"
+logs="$(pwd)/benchmarking/logs/rt-batch-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$logs"
 # Keep console input open; the grouper exits when it receives EOF.
 mkfifo "$logs/grouper.stdin"

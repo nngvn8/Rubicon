@@ -21,6 +21,6 @@
     "duration_exceedance"
   ],
   "queries_per_page": 6,
-  "output_dir": "../../benchmarking/plots/benchmark-comparisons",
+  "output_dir": "../../benchmarking/plots/runtime",
   "change_queries_per_page": 13
 }

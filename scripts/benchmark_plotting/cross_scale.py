@@ -178,7 +178,7 @@ def render_cross_scale(config, prepared):
     pairs, queries, interval, notices, inputs = prepared
     rendering = cross_scale_rendering(config, inputs, queries, interval)
     description = f"{config['name']}_cross-scale" if config.get("name") else "cross-scale"
-    with output_batch(config["output_dir"] / "batches", description=description) as (output, final):
+    with output_batch(config["output_dir"], description=description) as (output, final):
         figure = plot_cross_scale(pairs, queries, config["cross_scale"]["metric"], interval,
                                   config["cross_scale"].get("color_limits", [-20, 20]))
         try:

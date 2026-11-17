@@ -5,9 +5,8 @@ plan_source: plans
 
 benchmark:
   execution_mode: sequential  # sequential or concurrent
-  runs: 20
+  runs: 1
   warmup_runs: 0
-  out: "results/run_query"  # --out: regular query result output directory
   write_benchmark_results: true  # --write-benchmark-results / --no-write-benchmark-results
 
   # Optional local CU RSS measurement; enabling it also writes benchmark results.

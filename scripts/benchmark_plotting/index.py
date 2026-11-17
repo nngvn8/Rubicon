@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a standalone HTML batch index from manifests, optionally flattening old batches."""
+"""Build a standalone HTML batch index from manifests."""
 from __future__ import annotations
 
 import argparse
@@ -203,35 +203,6 @@ def batch_records(root):
     return annotate_records(records)
 
 
-def migrate_batches(root):
-    """Move completed legacy batches only; preserve manifests, images and batch IDs."""
-    target_root = root / "batches"
-    target_root.mkdir(parents=True, exist_ok=True)
-    moved = []
-    for record in batch_records(root):
-        source = Path(record["directory"])
-        if source.parent == target_root.resolve():
-            continue
-        ids = [compact_variant(record["metadata"][role], Path(source)) for role in ("baseline", "comparison")]
-        stem = f"{source.name}_{ids[0]}__vs__{ids[1]}"
-        target = target_root / stem
-        suffix = 0
-        while target.exists():
-            suffix += 1
-            target = target_root / f"{stem}_{suffix:02d}"
-        source.rename(target)
-        moved.append(target)
-        # Remove only empty old hierarchy directories; never remove their data.
-        ancestor = source.parent
-        while ancestor != root and ancestor.is_relative_to(root):
-            try:
-                ancestor.rmdir()
-            except OSError:
-                break
-            ancestor = ancestor.parent
-    return moved
-
-
 def write_index(root):
     root = Path(root).resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -254,13 +225,9 @@ def write_index(root):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("root", nargs="?", type=Path, default=Path(__file__).resolve().parents[2] / "benchmarking/plots/benchmark-comparisons")
-    parser.add_argument("--migrate", action="store_true", help="flatten completed legacy batches before building the index")
+    parser.add_argument("root", nargs="?", type=Path, default=Path(__file__).resolve().parents[2] / "benchmarking/plots/runtime")
     args = parser.parse_args()
     root = args.root.resolve()
-    if args.migrate:
-        for path in migrate_batches(root):
-            print(f"Moved batch: {path}")
     print(f"Index: {write_index(root)}")
 
 

@@ -16,7 +16,7 @@ elements['group-matching'].checked=true;
 const radios=['antigravity-ide','code'].map(value=>Object.assign(new Element('input'),{value}));
 function batch(id,sf,variant,optimization) {
   const metadata={scale_factor:sf,variant,optimization};
-  return {id,uid:id,group_id:`sf${sf}`,generated:'2026-10-30T12:00:00+00:00',directory:`/remote/${id}'s batch`,manifest:`batches/${id}/manifest.json`,labels:{baseline:'Baseline',comparison:'Merged'},metadata:{baseline:metadata,comparison:metadata},fields:{baseline:metadata,comparison:metadata},figures:15,queries:['q1.pb'],notices:[],rendering:null,related:[],redundant_of:null};
+  return {id,uid:id,group_id:`sf${sf}`,generated:'2026-10-30T12:00:00+00:00',directory:`/remote/${id}'s batch`,manifest:`${id}/manifest.json`,labels:{baseline:'Baseline',comparison:'Merged'},metadata:{baseline:metadata,comparison:metadata},fields:{baseline:metadata,comparison:metadata},figures:15,queries:['q1.pb'],notices:[],rendering:null,related:[],redundant_of:null};
 }
 const a=batch('a',2,{materialize_into_join:false},{gco:false});
 const b=batch('b',10,{materialize_into_join:true},{gco:true});

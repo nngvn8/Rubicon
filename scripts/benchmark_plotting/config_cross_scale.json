@@ -9,7 +9,7 @@
   "plots": [
     "cross_scale"
   ],
-  "output_dir": "../../benchmarking/plots/benchmark-comparisons",
+  "output_dir": "../../benchmarking/plots/runtime",
   "cross_scale": {
     "metric": "total_response_time",
     "scaling_interval": [

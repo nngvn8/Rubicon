@@ -23,8 +23,8 @@ CU_SCRIPT="${HOME}/start_rubi_cu.sh"
 
 TIMEOUT_SECONDS=20              # Per-plan budget; scaled by plan count per batch
 VERBOSE=false                   # Dump full run_query.py output per invocation
-LOG_CU=false                    # Write CU log to testing/cu-<timestamp>.log
-LOG_GROUPER=false               # Write Grouper log to testing/grouper-<timestamp>.log
+LOG_CU=false                    # Write CU log to testing/logs/cu-<timestamp>.log
+LOG_GROUPER=false               # Write Grouper log to testing/logs/grouper-<timestamp>.log
 RESTART_CU=false                # Restart CU after every single plan
 RESTART_BETWEEN_ROUNDS=false    # Start a fresh CU at the start of every round
 PLAN_SOURCE=pb_plans            # Subdirectory of data/ to run: pb_plans | plans
@@ -48,8 +48,8 @@ usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "      --log-cu        Save CU stdout/stderr to testing/cu-<timestamp>.log"
-    echo "      --log-grouper   Save Grouper stdout/stderr to testing/grouper-<timestamp>.log"
+    echo "      --log-cu        Save CU stdout/stderr to testing/logs/cu-<timestamp>.log"
+    echo "      --log-grouper   Save Grouper stdout/stderr to testing/logs/grouper-<timestamp>.log"
     echo "  -v, --verbose       Print full output from run_query.py for every test"
     echo "  -t, --timeout <sec> Timeout budget per plan; batches multiply it by plan count (default: 20)"
     echo "  -r, --restart-cu    Restart CU for every plan (default: reuse it)"
@@ -257,8 +257,8 @@ if [[ "$TOTAL_PLANS" -eq 0 ]]; then echo "No .pb plans found in $ACTIVE_DIR" >&2
 # --- Logging setup -----------------------------------------------------------
 
 # Per-session directory named by start time; plain mkdir fails if it already exists.
-mkdir -p "${RUBICON_ROOT}/testing" || exit 1
-LOG_DIR="${RUBICON_ROOT}/testing/plan-tests-$(date +%Y%m%d-%H%M%S)"
+mkdir -p "${RUBICON_ROOT}/testing/logs" || exit 1
+LOG_DIR="${RUBICON_ROOT}/testing/logs/plan-tests-$(date +%Y%m%d-%H%M%S)"
 mkdir "$LOG_DIR" || exit 1
 GRP_LOG="$LOG_DIR/grouper.log"
 CU_LOG="$LOG_DIR/cu.log"   # CU restarts append to this same file
@@ -266,9 +266,9 @@ CU_LOG="$LOG_DIR/cu.log"   # CU restarts append to this same file
 # Unique suffix (nanoseconds + PID) for the optional top-level logs.
 LOG_TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
-# --log-cu / --log-grouper redirect that service's log to testing/ instead of LOG_DIR.
-if [[ "$LOG_CU" == true ]]; then CU_LOG="${RUBICON_ROOT}/testing/cu-${LOG_TIMESTAMP}.log"; fi
-if [[ "$LOG_GROUPER" == true ]]; then GRP_LOG="${RUBICON_ROOT}/testing/grouper-${LOG_TIMESTAMP}.log"; fi
+# --log-cu / --log-grouper redirect that service's log to testing/logs/ instead of LOG_DIR.
+if [[ "$LOG_CU" == true ]]; then CU_LOG="${RUBICON_ROOT}/testing/logs/cu-${LOG_TIMESTAMP}.log"; fi
+if [[ "$LOG_GROUPER" == true ]]; then GRP_LOG="${RUBICON_ROOT}/testing/logs/grouper-${LOG_TIMESTAMP}.log"; fi
 
 # Print log destinations up front so they can be tailed during long runs.
 echo "CU output: $CU_LOG"
