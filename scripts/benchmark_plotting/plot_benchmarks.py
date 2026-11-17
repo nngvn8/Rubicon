@@ -22,7 +22,7 @@ from index import canonical_json, compact_variant
 from plots import configuration_caption, add_configuration_caption
 
 
-OUTPUT_ROOT = Path(__file__).resolve().parents[2] / "benchmarking/plots/benchmark-comparisons"
+OUTPUT_ROOT = Path(__file__).resolve().parents[2] / "benchmarking/plots/runtime"
 RENDERING_SOURCES = ("data.py", "plots.py", "plot_benchmarks.py", "index.py", "cross_scale.py", "bootstrap.py")
 
 def validate_name(value, field):
@@ -40,7 +40,7 @@ def comparison_name(config, experiments):
 
 
 def comparison_parent(config, experiments):
-    return config["output_dir"] / "batches"
+    return config["output_dir"]
 
 
 

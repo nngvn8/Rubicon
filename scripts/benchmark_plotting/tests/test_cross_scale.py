@@ -216,7 +216,7 @@ class CrossScaleTests(unittest.TestCase):
         self.mutate("comparison", 100, lambda d: d["metadata"].update(created_at="changed"))
         with self.assertRaisesRegex(ValueError, "changed during plotting"):
             render_cross_scale(config, prepared)
-        self.assertEqual(list((config["output_dir"] / "batches").iterdir()), [])
+        self.assertEqual([path for path in config["output_dir"].iterdir() if not path.name.startswith(".")], [])
 
     def test_fingerprint_covers_metric_interval_and_all_inputs(self):
         config = self.load()

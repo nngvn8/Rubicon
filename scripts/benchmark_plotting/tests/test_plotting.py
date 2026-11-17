@@ -220,7 +220,7 @@ class BatchOutputTests(unittest.TestCase):
         self.assertNotEqual(compact_variant({"variant": {"other": False}}, directory), compact_variant({"variant": {"other": True}}, directory))
         config = {"output_dir": self.root, "baseline": {"directory": directory}, "comparison": {"directory": directory}}
         experiments = [SimpleNamespace(metadata={"variant": {"materialize_into_join": value}, "workers_per_cu": 48, "scale_factor": 2}) for value in (False, True)]
-        self.assertEqual(comparison_parent(config, experiments), self.root / "batches")
+        self.assertEqual(comparison_parent(config, experiments), self.root)
         self.assertEqual(comparison_name(config, experiments), "baseline__vs__mat-join")
         config["baseline"]["id"] = "custom"
         config["name"] = "trial"
@@ -333,7 +333,7 @@ class IndexTests(unittest.TestCase):
 
     def test_index_uses_metadata_and_embeds_json_safely(self):
         from index import write_index, batch_records
-        directory = self.root / "batches" / "batch"
+        directory = self.root / "batch"
         manifest = self.make_batch(directory)
         manifest["config"]["baseline"]["label"] = "</script><script>alert(1)</script>"
         (directory / "manifest.json").write_text(json.dumps(manifest))
@@ -347,24 +347,9 @@ class IndexTests(unittest.TestCase):
         self.assertIn("stable-id", html)
         self.assertNotIn("__BATCH_DATA__", html)
 
-    def test_migration_preserves_images_manifests_and_handles_collisions(self):
-        from index import migrate_batches, batch_records
-        first = self.root / "old-comparison" / "w48_sf2" / "2026-10-30T12-00-00Z"
-        manifest = self.make_batch(first)
-        second = self.root / "another-comparison" / "w48_sf2" / first.name
-        self.make_batch(second, "second")
-        moved = migrate_batches(self.root)
-        self.assertEqual(len(moved), 2)
-        self.assertEqual(len({path.name for path in moved}), 2)
-        self.assertEqual({(path / "chart.png").read_text() for path in moved}, {"original", "second"})
-        self.assertTrue(all(path.parent == self.root / "batches" for path in moved))
-        self.assertTrue(all(json.loads((path / "manifest.json").read_text()) == manifest for path in moved))
-        self.assertEqual(len(batch_records(self.root)), 2)
-        self.assertEqual(migrate_batches(self.root), [])
-
     def test_staging_directories_are_not_indexed(self):
         from index import batch_records, write_index
-        self.make_batch(self.root / "batches" / ".plotting-partial")
+        self.make_batch(self.root / ".plotting-partial")
         self.assertEqual(batch_records(self.root), [])
         self.assertTrue(write_index(self.root).is_file())
 
