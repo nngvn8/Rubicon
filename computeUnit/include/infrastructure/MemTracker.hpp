@@ -8,6 +8,7 @@
 #include <WorkResponse.pb.h>
 #include <sys/resource.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -34,7 +35,9 @@ struct Owner {
 };
 
 enum class Kind : uint8_t {
-    Delta,      // value = +/- bytes of an output buffer (alloc, shrink, free)
+    Alloc,      // value = +bytes requested for an output buffer; buf = its id
+    Shrink,     // value = -(old - new) bytes after a realloc; buf = id of the Alloc it belongs to
+    Free,       // value = -bytes of an output buffer that is gone
     TempLevel,  // value = absolute bytes currently held by the temporaries of this operator
     Dropped     // value = number of events that did not fit into the log (written by flush)
 };
@@ -46,6 +49,8 @@ struct Event {
     uint32_t item;
     int64_t value;
     Kind kind;
+    uint8_t reserved[3]; // nice padding (padding itself added by compiler already)
+    uint32_t buf;   // pairs a Shrink with its Alloc, 0 = none
 };
 static_assert(sizeof(Event) == 32, "Event is written to disk as is, keep its layout stable");
 
@@ -59,7 +64,7 @@ struct FileHeader {
 };
 static_assert(sizeof(FileHeader) == 32, "FileHeader is written to disk as is");
 inline constexpr char kMagic[8] = {'R', 'U', 'B', 'I', 'M', 'E', 'M', '1'};
-inline constexpr uint32_t kFileVersion = 1;
+inline constexpr uint32_t kFileVersion = 2;
 
 // Per-thread state. Reset by OperatorScope at the start and end of every operator.
 struct ThreadCtx {
@@ -68,9 +73,17 @@ struct ThreadCtx {
     uint64_t requested = 0;        // bytes requested for outputs (capacity, not touched bytes)
     int64_t tempLive = 0;          // bytes held right now by temporary containers
     int64_t tempLogged = 0;        // tempLive at the time of the last snapshot
-    std::vector<std::pair<const void*, size_t>> booked;  // outputs allocated but not yet adopted by a Column
+    struct Booked {
+        const void* ptr;
+        size_t bytes;
+        uint32_t id;
+    };
+    std::vector<Booked> booked;  // outputs allocated but not yet adopted by a Column
 };
 inline thread_local ThreadCtx ctx;  // one copy per thread
+
+// Buffer ids are global, so one (plan, item) running on several threads never reuses an id.
+inline std::atomic<uint32_t> nextBufId{0};
 
 // A temp snapshot is written whenever tempLive moved this far since the last snapshot.
 constexpr int64_t kTempDelta = 8 << 20;  // 8 MiB
@@ -84,7 +97,7 @@ constexpr int64_t kTempDelta = 8 << 20;  // 8 MiB
 void init(size_t capacity, const std::string& path);
 
 // Append one event (lock-free). If the log is full the event is dropped and counted.
-void record(Owner o, int64_t value, Kind k = Kind::Delta);
+void record(Owner o, int64_t value, Kind k, uint32_t buf = 0);
 
 // Append the new events to the log file and make room for further ones. Call between rounds.
 // Returns the running number of this flush (1, 2, ...), or 0 on failure.
@@ -101,17 +114,18 @@ inline void onAlloc(const void* p, size_t bytes) {
     if (!ctx.owner.valid) return;  // outside an operator: not tracked
     ++ctx.allocCount;
     ctx.requested += bytes;
-    ctx.booked.emplace_back(p, bytes);
-    record(ctx.owner, +int64_t(bytes));
+    const uint32_t id = nextBufId.fetch_add(1, std::memory_order_relaxed) + 1;  // 0 means "no buffer"
+    ctx.booked.push_back({p, bytes, id});
+    record(ctx.owner, +int64_t(bytes), Kind::Alloc, id);
 }
 
 // Book a shrink (realloc to fewer bytes). The block may have moved from `oldp` to `newp`.
 inline void onShrink(const void* oldp, const void* newp, size_t newBytes) {
-    for (auto& [ptr, bytes] : ctx.booked) {
-        if (ptr != oldp) continue;
-        if (newBytes < bytes) record(ctx.owner, -int64_t(bytes - newBytes));
-        ptr = newp;
-        bytes = newBytes;
+    for (auto& b : ctx.booked) {
+        if (b.ptr != oldp) continue;
+        if (newBytes < b.bytes) record(ctx.owner, -int64_t(b.bytes - newBytes), Kind::Shrink, b.id);
+        b.ptr = newp;
+        b.bytes = newBytes;
         return;
     }
 }
@@ -119,8 +133,8 @@ inline void onShrink(const void* oldp, const void* newp, size_t newBytes) {
 // A Column takes over the buffer at `p`. Returns the bytes booked for it (0 if it was never booked).
 inline size_t adopt(const void* p) {
     for (size_t i = 0; i < ctx.booked.size(); ++i) {
-        if (ctx.booked[i].first != p) continue;
-        const size_t bytes = ctx.booked[i].second;
+        if (ctx.booked[i].ptr != p) continue;
+        const size_t bytes = ctx.booked[i].bytes;
         ctx.booked.erase(ctx.booked.begin() + i);
         return bytes;
     }
@@ -130,7 +144,7 @@ inline size_t adopt(const void* p) {
 // Book a free to its owner. Runs on any thread (the one that drops the last reference).
 inline void onFree(Owner o, size_t bytes) {
     if (!o.valid || bytes == 0) return;
-    record(o, -int64_t(bytes));
+    record(o, -int64_t(bytes), Kind::Free);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -203,7 +217,7 @@ class OperatorScope {
 
     ~OperatorScope() {
         // Buffers still booked were never adopted by a Column, i.e. freed inside the operator.
-        for (const auto& [ptr, bytes] : ctx.booked) onFree(ctx.owner, bytes);
+        for (const auto& b : ctx.booked) onFree(ctx.owner, b.bytes);
         ctx = ThreadCtx{};  // later work on this thread is not attributed to this operator
     }
 

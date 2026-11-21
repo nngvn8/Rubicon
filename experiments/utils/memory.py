@@ -472,8 +472,12 @@ class MemorySession:
                     'interpretation': 'windows/operators: whole-CU RSS during intervals, overlapping integrals are not additive. '
                                       'operator_tracking: requested capacity attributed to the producing operator (virtual, not RSS).'}
         if tracking_events is not None:
-            document['operator_tracking'] = memtrack.derive(tracking_events, self.plans)
-            self.metadata['memtrack_events_dropped'] = document['operator_tracking']['events_dropped']
+            try:
+                document['operator_tracking'] = memtrack.derive(tracking_events, self.plans)
+                self.metadata['memtrack_events_dropped'] = document['operator_tracking']['events_dropped']
+                self.metadata['memtrack_unpaired_shrinks'] = document['operator_tracking']['unpaired_shrinks']
+            except ValueError as error:  # keep the RSS results even if the log is inconsistent
+                self.metadata['errors'].append(f'memtrack: {type(error).__name__}: {error}')
         summary = self.directory / 'memory_summary.json'
         # Collection exports data only; plots can be regenerated separately later.
         summary.write_text(json.dumps(document, indent=2, allow_nan=False) + '\n')

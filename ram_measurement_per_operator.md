@@ -185,8 +185,53 @@ SINGLE_CPU_EXEC (compile-time alternative, no pool):
 - `flushed` is the number of slots from the start of the buffer that are already in the file. `next` is the number of slots handed out so far.
 - After writing, the buffer is reset to slot 0 with a compare-and-swap on `next`. If a writer was active in between, for example late frees from `dropTable` after the response, the reset is skipped and the next flush writes the rest.
 - If more events arrive than the capacity allows, the surplus is lost. `flush` then appends one `Dropped` event with the number lost, and the offline analysis must check for it.
-- The file is a 32-byte header (`magic "RUBIMEM1"`, `version`, `eventSize`, `capacity`, `startNs`) followed by a raw array of 32-byte `Event` structs (`t_ns`, `plan`, `item`, `value`, `kind`). The reader rejects a file whose magic, version or `eventSize` does not match.
+- The file is a 32-byte header (`magic "RUBIMEM1"`, `version` 2, `eventSize`, `capacity`, `startNs`) followed by a raw array of 32-byte `Event` structs (`t_ns`, `plan`, `item`, `value`, `kind`, `buf`). The reader rejects a file whose magic, version or `eventSize` does not match.
 - A CU process that serves several runner sessions keeps appending to the same file. The runner therefore drops all events older than its own session start (same clock, `CLOCK_MONOTONIC`).
+
+### Worst-case outputs: route A and route B
+
+Many operators allocate an output for the worst case and shrink it to the result with `tracked_shrink`. The log keeps both facts apart so the analysis can choose.
+
+- Kinds: `Alloc` (`+bytes`, `buf` = id), `Shrink` (`-(old - new)`, same `buf`), `Free` (`-bytes`, no id), `TempLevel`, `Dropped`.
+- `buf` is a global counter (`nextBufId`, 0 = none), so an id is never reused, also when one operator runs on several threads. `ThreadCtx::booked` keeps the id next to the pointer, so a shrink finds its `Alloc` even if `realloc` moved the block. The id exists only to pair the two events offline.
+- Route A (as allocated): `Alloc` and `Shrink` at their own timestamps. Shows the worst-case spike. Output: `peak_bytes`, `integral_mib_seconds`, plan `timeline`.
+- Route B (net): each `Shrink` is moved to the timestamp of its `Alloc`, so the buffer counts as its final size from the start. Output: `peak_bytes_net`, `integral_mib_seconds_net`, plan `timeline_net`.
+- `shrunk_bytes` = A minus B per operator: reserved, never needed. A `Shrink` whose `Alloc` is older than the session stays at its own time.
+- Both routes are virtual capacity. Neither is RSS (see below). `Free` books the final size, so it needs no id.
+
+### Temporaries reserved for the worst case
+
+Not changed so far. Tracked temporaries are counted as `TempLevel` snapshots (capacity added at `allocate`, subtracted at `deallocate`).
+
+| Where | Container | Tracked? | Worst-case reserve? |
+|---|---|---|---|
+| `FilterOperator::doActualInFilter` (IN filter) | `std::vector<size_t, TempAlloc>` `result_vec` | yes | yes, `reserve(column->elements)`, then copied into an exact-size output |
+| `SetIntersectOperator.hpp:122`, `SetUnionOperator.hpp:123` | plain `std::vector<uint64_t> out` | no | yes, `reserve(col1)` / `reserve(col1 + col2)`, then copied into an output |
+| `HashJoinOperatorMat` | `materializedInner` with `TempAlloc` | yes | no, `resize` to the exact count |
+| `HashJoinProber.hpp` hash table | `unordered_map` with `TempAlloc` | yes | no, `reserve(key_count)` is exact for unique keys; nodes are allocated per distinct key |
+| `doInFilter`, `FilterOperator.cpp` | `unordered_set` of predicate values / dictionary keys | no | no, small |
+
+Why only these three places: the SIMD filters, join, materialize, group and sort write directly into a `tracked_allocate` buffer and shrink it, so their worst case is already an output and route A/B covers it. The IN filter and the set operators do not know the result size, so they collect into a `std::vector` first and copy into an exact output. The IN filter vector went through `TempAlloc`. The set operators were never wired, so their `out` is invisible.
+
+Possibilities:
+
+1. **Leave as is.** The IN filter temp shows its full capacity in `TempLevel`; the set operator temps are not seen.
+2. **Wrap `out` in `TempAlloc`.** Makes the set operators visible, capacity only (no net).
+3. **Shrinkable temps (route A/B for temps).** `deallocate(p, n)` is called with the capacity, so a manual shrink to the used size would be subtracted twice. The allocator has to subtract the accounted bytes of that block instead (small per-thread list of `(ptr, id, accounted)`), and only for blocks above a size threshold (about 1 MiB), because hash-table nodes must not take the lookup. About 60 lines plus a mixed level in `derive()`.
+4. **Turn the temp into a normal output (simpler fix).** The IN filter and the set operators write into a `tracked_allocate` buffer (worst case: `column->elements`; intersect `min(n1, n2)`; union `n1 + n2`) and call `tracked_shrink`. The temp and the `memcpy` disappear, and route A/B applies without a new mechanism. This is "track temp data as normally tracked data".
+5. **Log the used size next to the capacity** (a snapshot of `size()` for `result_vec`). Cheap, but a separate mechanism for one call site.
+
+Option 3 is worth it only if more worst-case-reserve temps are expected. Option 4 fixes all three sites with the existing mechanism.
+
+### Requested bytes, malloc chunk and RSS
+
+Three different numbers:
+
+- **Requested bytes** (what the log holds): `n * sizeof(T)` of the call.
+- **malloc chunk**: what the allocator reserves. For glibc a 24-byte request is a 32-byte chunk (8-byte header, 16-byte rounding). Blocks above the mmap threshold are rounded up to whole pages plus a header. `malloc_usable_size` does not show the chunk: it returns 24 for the 24-byte request, so the chunk is about `usable + 8`. A hash-table node (`pair<const K, size_t>` plus next pointer, 24 bytes) thus costs 32 bytes, which the counting allocator under-reports by a quarter.
+- **RSS**: only touched, resident pages. A `reserve` or the tail of a shrunk block is virtual until written. Freed heap memory is often not returned (fragmentation, trim threshold, per-thread arenas, dynamic mmap threshold). The chunk size is closer to what malloc holds, but still not RSS.
+
+Consequence: route A and B are requested capacity. Route B is closer to what is used, `minorFaults` shows what became resident, and the RSS sampler stays the ground truth. Recording the chunk size would be done in the allocator hooks (`usable + 8`, page-rounded above the mmap threshold); not done.
 
 ### Personal notes and Understanding
 - One Thread Context (ThreadCtc) object per thread

@@ -57,11 +57,11 @@ void init(size_t capacity, const std::string& path) {
     std::fclose(f);
 }
 
-void record(Owner o, int64_t value, Kind k) {
+void record(Owner o, int64_t value, Kind k, uint32_t id) {
     if (!buf) return;  // init() was not called
     const size_t i = next.fetch_add(1, std::memory_order_relaxed);
     if (i >= cap) return;  // log full: never grow, flush() derives the dropped count from `next`
-    buf[i] = Event{nowNs(), o.plan, o.item, value, k};
+    buf[i] = Event{nowNs(), o.plan, o.item, value, k, {}, id};
 }
 
 uint64_t flush() {
@@ -81,7 +81,7 @@ uint64_t flush() {
     size_t expected = n;
     if (next.compare_exchange_strong(expected, 0)) {
         if (n > cap) {
-            const Event d{nowNs(), 0, 0, static_cast<int64_t>(n - cap), Kind::Dropped};
+            const Event d{nowNs(), 0, 0, static_cast<int64_t>(n - cap), Kind::Dropped, {}, 0};
             std::fwrite(&d, sizeof(Event), 1, f);
         }
         flushed = 0;
