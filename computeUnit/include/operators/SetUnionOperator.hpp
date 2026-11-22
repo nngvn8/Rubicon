@@ -116,12 +116,15 @@ class SetUnionOperator : public AbstractOperator {
     uint64_t do_union_pl(std::shared_ptr<Column> col1_struct, std::shared_ptr<Column> col2_struct, const uint64_t chunkElements = 1024) {
         col1_struct->wait_data_allocated();
         col2_struct->wait_data_allocated();
-        
+
         View chunk1 = View<uint64_t>(static_cast<uint64_t*>(col1_struct->data), chunkElements, col1_struct);
         View chunk2 = View<uint64_t>(static_cast<uint64_t*>(col2_struct->data), chunkElements, col2_struct);
 
-        std::vector<uint64_t> out;
-        out.reserve(col1_struct->elements + col2_struct->elements);
+        using cpu_executor = tsl::executor<tsl::runtime::cpu>;
+        cpu_executor exec;
+        uint64_t* res_ptr = memtrack::tracked_allocate<uint64_t>(exec, col1_struct->elements + col2_struct->elements, 64);
+
+        uint64_t elementCount = 0;
 
         auto it1 = chunk1.begin();
         auto it2 = chunk2.begin();
@@ -139,14 +142,14 @@ class SetUnionOperator : public AbstractOperator {
             }
 
             if (*it1 < *it2) {
-                out.push_back(*it1);
+                res_ptr[elementCount++] = *it1;
                 ++it1;
             } else if (*it2 < *it1) {
-                out.push_back(*it2);
+                res_ptr[elementCount++] = *it2;
                 ++it2;
             } else {
                 // Equal - add once, advance both
-                out.push_back(*it1);
+                res_ptr[elementCount++] = *it1;
                 ++it1;
                 ++it2;
             }
@@ -155,7 +158,7 @@ class SetUnionOperator : public AbstractOperator {
         // Drain remaining elements from whichever column isn't exhausted
         while (true) {
             for (; it1 != chunk1.end(); ++it1) {
-                out.push_back(*it1);
+                res_ptr[elementCount++] = *it1;
             }
             if (chunk1.isLastChunk()) break;
             ++chunk1;
@@ -164,24 +167,21 @@ class SetUnionOperator : public AbstractOperator {
 
         while (true) {
             for (; it2 != chunk2.end(); ++it2) {
-                out.push_back(*it2);
+                res_ptr[elementCount++] = *it2;
             }
             if (chunk2.isLastChunk()) break;
             ++chunk2;
             it2 = chunk2.begin();
         }
 
-        using cpu_executor = tsl::executor<tsl::runtime::cpu>;
-        cpu_executor exec;
-        uint64_t* res_ptr = memtrack::tracked_allocate<uint64_t>(exec, out.size(), 64);
-        std::memcpy(res_ptr, out.data(), out.size() * sizeof(uint64_t));
-        std::shared_ptr<Column> resColumn = std::make_shared<Column>(0, DataType::position_list, out.size() * sizeof(uint64_t), out.size(), false, true);
+        res_ptr = memtrack::tracked_shrink<uint64_t>(res_ptr, elementCount * sizeof(uint64_t));
+        std::shared_ptr<Column> resColumn = std::make_shared<Column>(0, DataType::position_list, elementCount * sizeof(uint64_t), elementCount, false, true);
         resColumn->setDataPtr(static_cast<void*>(res_ptr));
 
         LOG_DEBUG1("[SetUnionOperator] PositionList Result size: " << resColumn->elements << " elements." << std::endl;)
         SetOperationItem setData = m_work_item.setdata();
         DataCatalog::getInstance().addColumn(setData.outputcolumn().tabname(), setData.outputcolumn().colname(), resColumn);
 
-        return out.size();
+        return elementCount;
     }
 };

@@ -192,19 +192,21 @@ class FilterOperator : public AbstractOperator {
             return 0;
         }
 
-        std::vector<size_t, memtrack::TempAlloc<size_t>> result_vec;  // temporary, counted by the allocator
-        result_vec.reserve(column->elements);
+        using cpu_executor = tsl::executor<tsl::runtime::cpu>;
+        cpu_executor exec;
+        size_t* res_ptr = memtrack::tracked_allocate<size_t>(exec, column->elements, 64);
 
         column->wait_data_allocated();
         View chunk = View<base_t>(static_cast<base_t*>(column->data), chunkElements, column);
 
         size_t offset = 0;
+        size_t elementCount = 0;
 
         while (true) {
             auto data = chunk.begin();
             for (size_t i = 0; i < chunk.getNumberOfElements(); ++i) {
                 if (filterValuesSet.contains(data[i])) {
-                    result_vec.push_back(i + offset);
+                    res_ptr[elementCount++] = offset + i;
                 }
             }
 
@@ -217,22 +219,15 @@ class FilterOperator : public AbstractOperator {
             chunk++;
         }
 
-        std::shared_ptr<Column> resColumn = std::make_shared<Column>(0, DataType::position_list, result_vec.size() * sizeof(size_t), result_vec.size(), false, true);
+        std::shared_ptr<Column> resColumn = std::make_shared<Column>(0, DataType::position_list, elementCount * sizeof(size_t), elementCount, false, true);
 
-        void* res_data = std::malloc(result_vec.size() * sizeof(size_t));
-        if (!res_data) {
-            std::cerr << "[FilterOperator::doActualInFilter] Wasn't able to allocate the requested memory!" << std::endl;
-            exit(-1);
-        }
-        if (!res_data) throw std::bad_alloc{};
-        std::memcpy(res_data, result_vec.data(), result_vec.size() * sizeof(size_t));
-        memtrack::onAlloc(res_data, result_vec.size() * sizeof(size_t));  // output buffer, adopted by setDataPtr below
-        resColumn->setDataPtr(res_data);
+        res_ptr = memtrack::tracked_shrink<size_t>(res_ptr, elementCount * sizeof(size_t));
+        resColumn->setDataPtr(res_ptr);
 
         LOG_DEBUG1("[FilterOperator::doActualInFilter] My result has " << resColumn->elements << " elements." << std::endl;)
         DataCatalog::getInstance().addColumn(filterData.outputcolumn().tabname(), filterData.outputcolumn().colname(), resColumn);
 
-        return result_vec.size();
+        return elementCount;
     }
 
     template <class FilterImpl, typename CtorType = typename FilterImpl::CTorParamTupleT>
