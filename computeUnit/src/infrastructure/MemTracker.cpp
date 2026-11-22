@@ -8,8 +8,11 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <infrastructure/Logger.hpp>
+#include <map>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace memtrack {
 
@@ -29,9 +32,56 @@ uint64_t nowNs() {
     return static_cast<uint64_t>(ts.tv_sec) * 1000000000ull + static_cast<uint64_t>(ts.tv_nsec);
 }
 
+// Real chunk size of a `request` byte block, or 0 if it cannot be told.
+// Blocks allocated in a row sit one chunk apart, so the most frequent distance is the chunk size.
+size_t measureChunk(size_t request) {
+    constexpr int kWarmup = 4096;  // used up first: earlier code left freed chunks behind that would be handed out scattered
+    constexpr int kBlocks = 256;   // measured: by now they come from fresh heap, next to each other
+    std::vector<char*> blocks(kWarmup + kBlocks);
+    for (auto& b : blocks) b = static_cast<char*>(::operator new(request));
+
+    std::map<ptrdiff_t, int> distances;  // distance between neighbouring blocks -> how often
+    for (size_t i = kWarmup + 1; i < blocks.size(); ++i) ++distances[std::abs(blocks[i] - blocks[i - 1])];
+    const auto most = std::max_element(distances.begin(), distances.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
+    const bool clear = most->second >= (kBlocks - 1) * 8 / 10;  // a still fragmented heap gives no clear answer
+
+    for (char* b : blocks) ::operator delete(b);
+    return clear ? static_cast<size_t>(most->first) : 0;
+}
+
+// Check both counting models against the measured chunk sizes, cheapest first.
+ChunkMode detectChunkMode() {
+    bool formulaHolds = true;
+    bool usableHolds = true;
+    for (size_t request : {1, 8, 24, 25, 40, 41, 100, 1000}) {
+        const size_t measured = measureChunk(request);
+        if (measured == 0) return ChunkMode::Requested;
+        formulaHolds &= chunkFormula(request) == measured;
+        void* p = ::operator new(request);
+        usableHolds &= malloc_usable_size(p) + kChunkHeader == measured;
+        ::operator delete(p);
+    }
+    if (formulaHolds) return ChunkMode::Formula;
+    if (usableHolds) return ChunkMode::Usable;
+    return ChunkMode::Requested;
+}
+
 }  // namespace
 
 void init(size_t capacity, const std::string& path) {
+    // First, while the heap is still fresh: the measurement needs blocks that sit next to each other.
+    chunkMode = detectChunkMode();
+    switch (chunkMode) {
+        case ChunkMode::Formula:
+            LOG_INFO("[memtrack] Temporaries are counted as malloc chunks (computed with formula, verified at start)." << std::endl;)
+            break;
+        case ChunkMode::Usable:
+            LOG_INFO("[memtrack] Temporaries are counted as malloc chunks (malloc_usable_size() + header, verified at start)." << std::endl;)
+            break;
+        default:
+            LOG_WARNING("[memtrack] The malloc chunk size could not be verified: temporaries are counted as requested bytes (a hash table is then about 20% low)." << std::endl;)
+    }
+
     cap = capacity;
     logPath = path;
     buf = static_cast<Event*>(std::malloc(cap * sizeof(Event)));

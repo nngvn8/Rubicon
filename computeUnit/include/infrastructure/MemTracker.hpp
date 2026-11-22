@@ -6,6 +6,7 @@
 
 #include <WorkItem.pb.h>
 #include <WorkResponse.pb.h>
+#include <malloc.h>
 #include <sys/resource.h>
 
 #include <atomic>
@@ -38,7 +39,7 @@ enum class Kind : uint8_t {
     Alloc,      // value = +bytes requested for an output buffer; buf = its id
     Shrink,     // value = -(old - new) bytes after a realloc; buf = id of the Alloc it belongs to
     Free,       // value = -bytes of an output buffer that is gone
-    TempLevel,  // value = absolute bytes currently held by the temporaries of this operator
+    TempLevel,  // value = absolute bytes currently held by the temporaries of this operator (chunk bytes, see ChunkMode)
     Dropped     // value = number of events that did not fit into the log (written by flush)
 };
 
@@ -87,6 +88,38 @@ inline std::atomic<uint32_t> nextBufId{0};
 
 // A temp snapshot is written whenever tempLive moved this far since the last snapshot.
 constexpr int64_t kTempDelta = 8 << 20;  // 8 MiB
+
+// ---------------------------------------------------------------------------------------------
+// Bytes counted per temporary block
+// ---------------------------------------------------------------------------------------------
+
+// malloc hands out more than requested: a 24 byte request occupies a 32 byte chunk. The chunk
+// is what the block really costs in memory. Which of these ways of counting is trustworthy is
+// measured once at start (detectChunkMode in MemTracker.cpp), the cheapest verified one is used.
+enum class ChunkMode : uint8_t {
+    Requested,  // bytes asked for; fallback when no chunk model could be verified
+    Formula,    // chunk size computed from the request (cheapest)
+    Usable      // malloc_usable_size(p) + kChunkHeader (one call per block)
+};
+inline ChunkMode chunkMode = ChunkMode::Requested;  // written once by init(), read-only afterwards
+
+inline constexpr size_t kChunkHeader = 8;  // size field in front of every glibc chunk (64-bit)
+
+// glibc 64-bit: request plus header, rounded up to 16 bytes, at least 32.
+inline size_t chunkFormula(size_t request) {
+    const size_t chunk = (request + kChunkHeader + 15) & ~size_t(15);
+    return chunk < 32 ? 32 : chunk;
+}
+
+// Bytes to count for the block `p` that was requested with `request` bytes.
+// Allocate and free must see the same mode, which holds because chunkMode never changes after init().
+inline size_t accountedBytes(size_t request, const void* p) {
+    switch (chunkMode) {
+        case ChunkMode::Formula: return chunkFormula(request);
+        case ChunkMode::Usable: return malloc_usable_size(const_cast<void*>(p)) + kChunkHeader;
+        default: return request;
+    }
+}
 
 // ---------------------------------------------------------------------------------------------
 // The log (MemTracker.cpp)
@@ -180,11 +213,12 @@ struct CountingAllocator {
     CountingAllocator(const CountingAllocator<U>&) noexcept {}  // needed for rebinding to node/bucket types
 
     T* allocate(size_t n) {
-        onTempAlloc(n * sizeof(T));
-        return static_cast<T*>(::operator new(n * sizeof(T)));
+        T* p = static_cast<T*>(::operator new(n * sizeof(T)));
+        onTempAlloc(accountedBytes(n * sizeof(T), p));  // after the allocation, the Usable mode needs the pointer
+        return p;
     }
     void deallocate(T* p, size_t n) noexcept {
-        onTempFree(n * sizeof(T));
+        onTempFree(accountedBytes(n * sizeof(T), p));  // before the free, the block is gone afterwards
         ::operator delete(p);
     }
     template <class U>

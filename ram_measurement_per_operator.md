@@ -228,10 +228,12 @@ Option 3 is worth it only if more worst-case-reserve temps are expected. Option 
 Three different numbers:
 
 - **Requested bytes** (what the log holds): `n * sizeof(T)` of the call.
-- **malloc chunk**: what the allocator reserves. For glibc a 24-byte request is a 32-byte chunk (8-byte header, 16-byte rounding). Blocks above the mmap threshold are rounded up to whole pages plus a header. `malloc_usable_size` does not show the chunk: it returns 24 for the 24-byte request, so the chunk is about `usable + 8`. A hash-table node (`pair<const K, size_t>` plus next pointer, 24 bytes) thus costs 32 bytes, which the counting allocator under-reports by a quarter.
+- **malloc chunk**: what the allocator reserves. For glibc a 24-byte request is a 32-byte chunk (8-byte header, 16-byte rounding). Blocks above the mmap threshold are rounded up to whole pages plus a header. `malloc_usable_size` does not show the chunk: it returns 24 for the 24-byte request, so the chunk is about `usable + 8`. A hash-table node (`pair<const K, size_t>` plus next pointer, 24 bytes) thus costs 32 bytes. Measured with 4M unique keys: 40 bytes per key in RSS (8 bucket + 32 node), while requested bytes give 32.
 - **RSS**: only touched, resident pages. A `reserve` or the tail of a shrunk block is virtual until written. Freed heap memory is often not returned (fragmentation, trim threshold, per-thread arenas, dynamic mmap threshold). The chunk size is closer to what malloc holds, but still not RSS.
 
-Consequence: route A and B are requested capacity. Route B is closer to what is used, `minorFaults` shows what became resident, and the RSS sampler stays the ground truth. Recording the chunk size would be done in the allocator hooks (`usable + 8`, page-rounded above the mmap threshold); not done.
+Consequence: route A and B for outputs are requested capacity (large blocks, the header does not matter). Route B is closer to what is used, `minorFaults` shows what became resident, and the RSS sampler stays the ground truth.
+
+Temporaries (`CountingAllocator`) are counted as chunks. `init()` measures the real chunk size once (`detectChunkMode`: 256 blocks in a row, the most frequent distance between neighbours) and checks two models against it, cheapest first: `Formula` (request + 8, rounded up to 16, at least 32) and `Usable` (`malloc_usable_size + 8`). The first one that matches all probe sizes is used for the whole run, so allocate and free always count the same. If none matches or the heap gives no clear measurement, `Requested` is used and a warning is logged (a hash table is then about 20% low). The chosen mode is only logged, not written to the memory log. Not covered: blocks above the mmap threshold (header 16 bytes, page rounding, negligible for MiB-sized blocks) and worker arenas (probed on the main thread only).
 
 ### Personal notes and Understanding
 - One Thread Context (ThreadCtc) object per thread
