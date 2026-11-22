@@ -235,6 +235,84 @@ Consequence: route A and B for outputs are requested capacity (large blocks, the
 
 Temporaries (`CountingAllocator`) are counted as chunks. `init()` measures the real chunk size once (`detectChunkMode`: 256 blocks in a row, the most frequent distance between neighbours) and checks two models against it, cheapest first: `Formula` (request + 8, rounded up to 16, at least 32) and `Usable` (`malloc_usable_size + 8`). The first one that matches all probe sizes is used for the whole run, so allocate and free always count the same. If none matches or the heap gives no clear measurement, `Requested` is used and a warning is logged (a hash table is then about 20% low). The chosen mode is only logged, not written to the memory log. Not covered: blocks above the mmap threshold (header 16 bytes, page rounding, negligible for MiB-sized blocks) and worker arenas (probed on the main thread only).
 
+Code (`MemTracker.hpp`): the three ways of counting and the function the allocator calls.
+```cpp
+enum class ChunkMode : uint8_t { Requested, Formula, Usable };
+inline ChunkMode chunkMode = ChunkMode::Requested;  // written once by init(), read-only afterwards
+inline constexpr size_t kChunkHeader = 8;           // size field in front of every glibc chunk (64-bit)
+
+// glibc 64-bit: request plus header, rounded up to 16 bytes, at least 32.
+inline size_t chunkFormula(size_t request) {
+    const size_t chunk = (request + kChunkHeader + 15) & ~size_t(15);  // +15 then clearing the low 4 bits rounds up
+    return chunk < 32 ? 32 : chunk;
+}
+
+inline size_t accountedBytes(size_t request, const void* p) {
+    switch (chunkMode) {
+        case ChunkMode::Formula: return chunkFormula(request);
+        case ChunkMode::Usable: return malloc_usable_size(const_cast<void*>(p)) + kChunkHeader;
+        default: return request;
+    }
+}
+```
+Examples of the formula: request 1 and 24 give 32 (24 requested + 8 header), 25 gives 48, 41 gives 64.
+
+Code (`MemTracker.hpp`): the counting allocator counts the same number on allocate and free.
+```cpp
+T* allocate(size_t n) {
+    T* p = static_cast<T*>(::operator new(n * sizeof(T)));
+    onTempAlloc(accountedBytes(n * sizeof(T), p));  // after the allocation, the Usable mode needs the pointer
+    return p;
+}
+void deallocate(T* p, size_t n) noexcept {
+    onTempFree(accountedBytes(n * sizeof(T), p));  // before the free, the block is gone afterwards
+    ::operator delete(p);
+}
+```
+
+Code (`MemTracker.cpp`): the check at start.
+```cpp
+// Real chunk size of a `request` byte block, or 0 if it cannot be told.
+size_t measureChunk(size_t request) {
+    constexpr int kWarmup = 4096;  // used first such that the actual kBlocks use fresh unscattered heap and are therefore next to each other, such that we can measure the distance between them
+    constexpr int kBlocks = 256;   // measured: by now they come from fresh heap, next to each other
+    std::vector<char*> blocks(kWarmup + kBlocks);
+    for (auto& b : blocks) b = static_cast<char*>(::operator new(request));
+
+    std::map<ptrdiff_t, int> distances;  // distance between neighbouring blocks -> how often
+    for (size_t i = kWarmup + 1; i < blocks.size(); ++i) ++distances[std::abs(blocks[i] - blocks[i - 1])];
+    const auto most = std::max_element(distances.begin(), distances.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
+    const bool clear = most->second >= (kBlocks - 1) * 8 / 10;  // a still fragmented heap gives no clear answer
+
+    for (char* b : blocks) ::operator delete(b);
+    return clear ? static_cast<size_t>(most->first) : 0;
+}
+
+// Check both counting models against the measured chunk sizes, cheapest first.
+ChunkMode detectChunkMode() {
+    bool formulaHolds = true;
+    bool usableHolds = true;
+    for (size_t request : {1, 8, 24, 25, 40, 41, 100, 1000}) {
+        const size_t measured = measureChunk(request);
+        if (measured == 0) return ChunkMode::Requested;
+        formulaHolds &= chunkFormula(request) == measured;
+        void* p = ::operator new(request);
+        usableHolds &= malloc_usable_size(p) + kChunkHeader == measured;
+        ::operator delete(p);
+    }
+    if (formulaHolds) return ChunkMode::Formula;
+    if (usableHolds) return ChunkMode::Usable;
+    return ChunkMode::Requested;
+}
+
+void init(size_t capacity, const std::string& path) {
+    chunkMode = detectChunkMode();  // first, while the heap is still fresh (single thread, before the worker pool exists)
+    // ... LOG_INFO for Formula/Usable, LOG_WARNING for the Requested fallback, then the log setup
+}
+```
+
+Why the measurement is trustworthy although adjacency is not guaranteed: `blocks[i]` and `blocks[i + 1]` are only allocated one after the other in time, the vector says nothing about where they sit. glibc hands out consecutive blocks from the top of the heap only when no freed chunks are available, which is what the warm-up is for. The check does not assume adjacency, it tests it: if the blocks were scattered, the distances would differ and no distance would reach 80% of the pairs, so `measureChunk` returns 0 and the mode falls back to `Requested`. In addition the measured distance has to equal the formula (or `malloc_usable_size + 8`) for all eight sizes.
+
 ### Personal notes and Understanding
 - One Thread Context (ThreadCtc) object per thread
     - containing
@@ -268,6 +346,44 @@ Temporaries (`CountingAllocator`) are counted as chunks. `init()` measures the r
         - Therefore found in onAlloc, onFree
     - Saved in ThreadCtx (updated by scope for each operator call)
         - Also saved in `Column::owner` when the column takes its buffer. That copy is what `~Column` passes to `onFree`.
+- Chunks size
+    - Malloc requires an extra 8 bytes on the 32 that each hashmap entry occupies.
+        - HashMap:
+            - array of buckets, which contain nodes
+                - there are several nodes in bucket if there was a collision. Usually there should just be one node per bucket
+            - one node is one entry
+            - bucket array is #buckets * 8 bytes 
+                - Allocated in one block also using the allocator
+                - 8 bytes malloc header -> 8 byte we add with the formula
+            - per entry:
+                - 32 bytes per node
+                    - 24 requested
+                        - 8 bytes next ptr
+                        - 8 bytes key
+                        - 8 bytes value
+                    - 8 bytes malloc header -> this is the 8 we add with the formula
+    - For tracking we add those 8 extra bytes
+        - by formula: computes how many bytes are occupied
+        - by asking malloc_usable_size(): how many bytes does our pointer occupy? Add 8 on that.
+    - In the beginning we verify once if the usage of formula or malloc_usable_size is justified. 
+        - We use an vector of char pointers, that we allocate number of bytes to (we do that for different amounts of allocated bytes) 
+        - Then we compute the distances between subsequent ones
+        - Subsequence is ensure by allocating a warm up amount of blocks on the heap, that ensure that blocks we want to measure are on fresh heap and therefore next to each other
+            - Perfectly interleaved heap allocations could falsify distance 
+        - The distance found the most is taken as the actual block size that the two approaches above have to match.
+            - this is used to circumvent stray interleaved heap allocations of others
+    - Inaccuracies
+        - anything that goes above mmap threshold is allocated by mmap
+        - mmap behavior
+            - 16 bytes header instead of 8 (+8 bytes)
+            - request + 16 byte header is rounded to multiple of 4096 bytes
+                - Can be a padding of at most 4095 bytes (4096 page size minus one because it must be filled with at least one byte in order to be rounded up)
+            - So up 4103 bytes missed
+            - threshold for mmap rises dynamically (up til 32MiB) with frees on mmap memory so mostly an issue in the beginning 
+        - mmap triggering for hash map building
+            - never the case for individual nodes
+            - may be the case when building the bucket array (e.g. 8 bytes * 4M entries)
+                
 
 ### Temporary vs. non-temporary allocations
 
