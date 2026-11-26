@@ -204,7 +204,7 @@ UnitWorker::UnitWorker(WorkerPool* pool, cpu_set_t affinity) : owning_pool(pool)
                 // Attributes allocations and page faults on this thread to this operator
                 memtrack::OperatorScope scope(my_task.original_work_item);
                 my_task.response = std::move(my_task.op->run());
-                scope.finish(my_task.response);
+                scope.finish();
             }
             owning_pool->onFinish(my_task);
             busy = false;

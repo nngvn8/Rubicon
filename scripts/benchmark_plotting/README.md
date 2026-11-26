@@ -87,7 +87,9 @@ python3 scripts/benchmark_plotting/plot_memory.py /path/to/benchmark-session
 
 The input may also be that session's `results.json` or `memory_summary.json`.
 The command reads `memory_samples.csv` and `memory_summary.json` without changing
-them. It writes `memory.png` and a source-fingerprinted `manifest.json` into a
+them. It writes `memory/round_1.png`, `round_2.png`, `mean_rounds_2-N.png` (mean of
+rounds 2..N, aligned on plan boundaries, with a min-max band) and `all_rounds.png`, plus a
+source-fingerprinted `manifest.json`, into a
 new batch under `benchmarking/plots/memory/`, named
 `<timestamp>_<mode>_<variant>_sf<N>_<run timestamp>` (for example
 `..._sequential_mat-join_sf50_2026-11-16T23-33-25Z`). Use `--output-dir PATH` to choose
@@ -96,11 +98,20 @@ another output parent. Regenerating a plot creates a new batch.
 A `--memtrack` run also leaves `memtrack_events.csv` next to `results.json`; the raw
 `<mode>-sf<N>-memtrack.bin` files stay in `benchmarking/logs/memtrack-batch-<timestamp>/`.
 
-The top panel shows whole-CU RSS, its fixed baseline, and round boundaries.
-The lower panel shows plan intervals per query and clock-aligned operator
+The top panel shows whole-CU RSS above the session baseline and, for `--memtrack`
+runs, the tracked requested capacity as gross (as allocated) and, for sessions that
+logged buffer ids, net (outputs at their final size from allocation).
+The lower panel shows plan intervals per query and operator
 segments; warmup plans are faded. Large sampling gaps break the RSS curve.
 Execution intervals show concurrent activity, not ownership of resident memory.
-Absolute and baseline-relative integrals remain in `memory_summary.json`;
+
+Cross-scale memory matrices (merged vs non-merged materialization) come from
+`plot_memory.py --cross-scale DIR ...`, passing one directory per variant, execution mode and scale factor
+(runs with net timelines). It writes `memory/cross_scale_peak.png`, `cross_scale_integral.png` and
+`cross_scale_average.png`: sequential left, concurrent right, queries by scale factor, colored at ±20 %.
+Each cell is `100 * (merged / non-merged - 1)` of the median over measured rounds of the net tracked
+curve: peak, integral over the plan window, and that integral divided by the plan duration.
+Absolute integrals remain in `memory_summary.json`;
 overlapping window integrals must not be summed. RAM plotting is separate from
 the two-experiment timing-comparison configuration and browser.
 

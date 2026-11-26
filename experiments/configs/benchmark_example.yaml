@@ -5,17 +5,15 @@ plan_source: plans
 
 benchmark:
   execution_mode: concurrent  # sequential or concurrent
-  runs: 1
+  runs: 10
   warmup_runs: 0
   write_benchmark_results: true  # --write-benchmark-results / --no-write-benchmark-results
 
-  # Optional local CU RSS measurement; enabling it also writes benchmark results.
-  measure_memory: true  # --measure-memory / --no-measure-memory
-  memory_source: auto  # --memory-source: auto, smaps_rollup, or status
+  # Optional ram tracking (RSS measurement + per-operator memory tracking); enabling it also writes benchmark results.
+  memtrack: true  # --memtrack / --no-memtrack; needs a CU built with RAM_TRACKING
   memory_interval_ms: 20.0  # --memory-interval-ms
   memory_baseline_ms: 500.0  # --memory-baseline-ms
   memory_tail_ms: 500.0  # --memory-tail-ms
-  memory_max_gap_ms: null  # --memory-max-gap-ms: null means 5 sampling intervals
 
 # Describe the actual ComputeUnit build; these values do not change compilation.
 compilation:
@@ -29,13 +27,13 @@ optimization:
   gco: false
   merge_sort: true
   semi_joins: false
-  materialize_into_join: true
+  materialize_into_join: false
 
 # Additional experiment variant metadata.
 # --variant KEY=VALUE overrides/adds entries here; the flag can be repeated.
 variant:
-  materialize_into_join: true
+  materialize_into_join: false
 
 experiment:
-  reason: "Test late-no-gco plans with materialization merged into joins"
+  reason: "Baseline late-no-gco plans without materialization merged into joins"
   notes: "Add machine, data, or revision notes here."

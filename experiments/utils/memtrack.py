@@ -89,10 +89,10 @@ def derive(events: list[tuple], plans: dict | None = None) -> dict:
     dropped = sum(value for _, _, _, value, kind, _ in events if kind == DROPPED)
     # Buffer id -> time of its Alloc, used to move a Shrink back to its Alloc for route B.
     alloc_time = {buf: t for t, _, _, _, kind, buf in events if kind == ALLOC}
-    # Per (plan, item): route A events (gross), route B events (net), temp snapshots, total shrunk bytes.
-    owners = defaultdict(lambda: {'gross': [], 'net': [], 'temp': [], 'shrunk': 0})
+    # Per (plan, item): route A events (gross), route B events (net), temp snapshots.
+    owners = defaultdict(lambda: {'gross': [], 'net': [], 'temp': []})
     unpaired_shrinks = 0
-    # Fill gross, net, temp lists for each owner. Also maintain shrunk bytes and unpaired shrinks.
+    # Fill gross, net, temp lists for each owner. Also count unpaired shrinks.
     for t, plan, item, value, kind, buf in events:
         if kind == DROPPED:
             continue  # carries plan 0 and item 0, which is not an operator
@@ -107,7 +107,6 @@ def derive(events: list[tuple], plans: dict | None = None) -> dict:
         owner['gross'].append((t, value))
         net_t = t
         if kind == SHRINK:
-            owner['shrunk'] -= value
             if buf in alloc_time:
                 net_t = alloc_time[buf]  # route B: the buffer counts as its final size from its Alloc on
             else:
@@ -131,6 +130,8 @@ def derive(events: list[tuple], plans: dict | None = None) -> dict:
         area_net = sum(a[1] * (b[0] - a[0]) for a, b in zip(steps_net, steps_net[1:])) / 1e9
         at_end = [s for s in steps if s[0] <= end]  # includes the end snapshot, so never empty
         window = plans.get(plan, {})
+        steps_by_plan[plan].append(steps)
+        steps_net_by_plan[plan].append(steps_net)
         operators.append({
             'plan_id': plan, 'item': item,
             'query': window.get('query'), 'round': window.get('round'), 'warmup': window.get('warmup'),
@@ -139,12 +140,9 @@ def derive(events: list[tuple], plans: dict | None = None) -> dict:
             'integral_mib_seconds': area / MIB,
             'peak_bytes_net': max(s[1] for s in steps_net),
             'integral_mib_seconds_net': area_net / MIB,
-            'shrunk_bytes': owner['shrunk'],                        # reserved but not needed: A minus B
             'retained_bytes': at_end[-1][2],                        # outputs when the operator ended
             'live_bytes_at_plan_end': steps[-1][2],                 # outputs still live after the last event; 0 once freed
         })
-        steps_by_plan[plan].append(steps)
-        steps_net_by_plan[plan].append(steps_net)
     return {'events': len(events), 'events_dropped': dropped, 'unpaired_shrinks': unpaired_shrinks,
             'operators': sorted(operators, key=lambda r: (r['plan_id'], r['item'])),
             'plans': [{'plan_id': plan, 'timeline': plan_timeline(steps),

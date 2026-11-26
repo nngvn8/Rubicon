@@ -1,6 +1,5 @@
 import argparse
 import json
-import math
 import platform
 import re
 import statistics
@@ -486,21 +485,12 @@ def main():
         help="Write a timestamped benchmark result directory under benchmarking/.",
     )
     # Memory collection uses the PID discovered from the local CU process.
-    # BooleanOptionalAction also permits --no-measure-memory to override YAML true.
-    parser.add_argument('--measure-memory', action=argparse.BooleanOptionalAction,
-                        default=benchmark_defaults.get('measure_memory', False),
-                        help='Collect local CU RSS and integrals beside benchmark results.')
-    parser.add_argument('--memory-source', choices=('auto', 'smaps_rollup', 'status'),
-                        default=benchmark_defaults.get('memory_source', 'auto'),
-                        help='auto pilots smaps_rollup cost and selects one source for the session.')
     parser.add_argument('--memory-interval-ms', type=float, default=benchmark_defaults.get('memory_interval_ms', 20.0))
     parser.add_argument('--memory-baseline-ms', type=float, default=benchmark_defaults.get('memory_baseline_ms', 500.0))
     parser.add_argument('--memory-tail-ms', type=float, default=benchmark_defaults.get('memory_tail_ms', 500.0))
-    parser.add_argument('--memory-max-gap-ms', type=float, default=benchmark_defaults.get('memory_max_gap_ms'),
-                        help='Reject integration across larger sample gaps (default: 5 sampling intervals).')
     parser.add_argument('--memtrack', action=argparse.BooleanOptionalAction,
-                        default=benchmark_defaults.get('memtrack', False),
-                        help='Per-operator memory tracking; needs --measure-memory and a CU built with RAM_TRACKING.')
+                        default=benchmark_defaults.get('memtrack', True),
+                        help='Measure process RSS and per-operator memory tracking; needs CU built with RAM_TRACKING.')
     parser.add_argument('--memlog', default=benchmark_defaults.get('memlog', 'memtrack.bin'),
                         help='Value of the CU flag -memlog (relative paths are relative to the CU working directory).')
 
@@ -512,16 +502,8 @@ def main():
         parser.error("--runs must be at least 1")
     if args.warmup_runs < 0:
         parser.error("--warmup-runs must not be negative")
-    if args.memtrack and not args.measure_memory:
-        parser.error('--memtrack requires --measure-memory')
-    if args.measure_memory:
-        # Validate settings before connecting or launching a sampling process.
-        for name in ('memory_interval_ms', 'memory_baseline_ms', 'memory_tail_ms'):
-            if not math.isfinite(getattr(args, name)) or getattr(args, name) <= 0:
-                parser.error(f'--{name.replace("_", "-")} must be finite and positive')
-        if args.memory_max_gap_ms is not None and (not math.isfinite(args.memory_max_gap_ms)
-                or args.memory_max_gap_ms < args.memory_interval_ms):
-            parser.error('--memory-max-gap-ms must be finite and at least --memory-interval-ms')
+    if args.memtrack and not args.write_benchmark_results:
+        parser.error("--memtrack requires --write-benchmark-results")
     try:
         variant = dict(benchmark_config.get("variant", {}))
         variant.update(parse_variant_assignments(args.variant))
@@ -585,13 +567,12 @@ def main():
         src_uuid, tgt_uuid = discover_compute_unit(client)
         set_workers_for_compute_units(client, workers_per_cu)
         time.sleep(1.0)
-        if args.measure_memory:
+        if args.memtrack:
             assert benchmark_file is not None
             # Write measurements next to this session's timing JSON for later plotting.
             memory = MemorySession(args.cu_pid, benchmark_file.parent,
-                source=args.memory_source, interval_ms=args.memory_interval_ms,
-                baseline_ms=args.memory_baseline_ms, tail_ms=args.memory_tail_ms,
-                max_gap_ms=args.memory_max_gap_ms)
+                interval_ms=args.memory_interval_ms,
+                baseline_ms=args.memory_baseline_ms, tail_ms=args.memory_tail_ms)
             # Preserve context even if an exception prevents results.json from being written.
             memory.metadata['benchmark'] = {
                 'execution_mode': args.execution_mode, 'scale_factor': scale_factor,
@@ -603,10 +584,9 @@ def main():
             def terminate_benchmark(signum, frame):
                 raise KeyboardInterrupt('benchmark terminated')
             previous_sigterm = signal.signal(signal.SIGTERM, terminate_benchmark)
-            # start() waits for the first sample, ensuring future windows are bracketed.
+            # start() waits for the first sample, ensuring future intervals are bracketed.
             memory.start()
-            if args.memtrack:
-                memory.enable_tracking(args.memlog, client, src_uuid, tgt_uuid)
+            memory.enable_tracking(args.memlog, client, src_uuid, tgt_uuid)
         for query in query_list:
             benchmark_results[Path(query).name] = {"samples": [], "failures": []}
 
@@ -707,7 +687,7 @@ def main():
                     })
                     samples_by_plan[plan_id] = benchmark_results[Path(query).name]["samples"][-1]
                     if memory:
-                        # Randomized plan IDs link a timing sample to its memory window.
+                        # Randomized plan IDs link a timing sample to its memory plan entry.
                         samples_by_plan[plan_id]['plan_id'] = plan_id
                     print(plan_response.info)
 
@@ -717,9 +697,6 @@ def main():
             last_end = max(item.end for item in extended)
             arrivals = [arrived for _, arrived in completed.values()]
             if memory:
-                # Warmup and measured rounds each start at 1; the warmup flag disambiguates.
-                memory.complete_round(round_number if is_warmup else measured_round,
-                                      is_warmup, round_start, max(arrivals))
                 if args.memtrack:
                     # The late frees of dropTable may land in the next flush; finish() flushes once more.
                     memory.flush_cu_log()

@@ -105,7 +105,7 @@ for sf in $SCALE_FACTORS; do
         (cd experiments && exec uv run python -u run_query.py --config "$config" \
             --execution-mode "$execution_mode" --runs "$RUNS" --warmup-runs 0 \
             --plan-source "$PLAN_SOURCE" \
-            --measure-memory --memtrack --memlog "$memlog") \
+            --memtrack --memlog "$memlog") \
             > "$logs/${run}-queries.log" 2>&1 &
         runner_pid=$!
         # Waiting on a background runner lets signal traps terminate it and its collector.

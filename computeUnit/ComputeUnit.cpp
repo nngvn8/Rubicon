@@ -113,29 +113,6 @@ int main(int argc, char** argv) {
 
     auto onFinish = [&client, &orch, &groupToPlanMutex, &groupToPlanMapping, &planToGroupMapping, &groupToTableMapping, &planToExtendedResults, &planToExtendedResultsMutex](const Task& task) -> void {
         auto sendPlanResponse = [&client, &task](PlanResponse response) -> void {
-            // Explicitly map the operator clock to the Linux collector clock.
-            // This runs outside operator timing and keeps old clients compatible.
-            timespec before{}, after{};
-            // Bracket the native clock read to bound its position on the collector clock.
-            const bool have_before = clock_gettime(CLOCK_MONOTONIC, &before) == 0;
-            const auto operator_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::high_resolution_clock::now().time_since_epoch()).count();
-            const bool have_after = clock_gettime(CLOCK_MONOTONIC, &after) == 0;
-            if (have_before && have_after) {
-                // Convert timespec seconds/nanoseconds before calculating the midpoint.
-                const uint64_t before_ns = static_cast<uint64_t>(before.tv_sec) * 1000000000ULL + before.tv_nsec;
-                const uint64_t after_ns = static_cast<uint64_t>(after.tv_sec) * 1000000000ULL + after.tv_nsec;
-                response.set_operatorclockns(operator_ns);
-                response.set_collectorclockns(before_ns + (after_ns - before_ns) / 2);
-                // Half the bracket width is the maximum placement uncertainty of the anchor.
-                response.set_clockanchoruncertaintyns((after_ns - before_ns + 1) / 2);
-            }
-            // Let the client verify that the sampled local process executed this response.
-            response.set_computeunitpid(static_cast<uint32_t>(getpid()));
-            char host[256]{};
-            if (gethostname(host, sizeof(host) - 1) == 0) {
-                response.set_computeunithost(host);
-            }
             tuddbs::TCPMetaInfo info;
             info.package_type = TcpPackageType::PLAN_RESPONSE;
             info.payload_size = response.ByteSizeLong();

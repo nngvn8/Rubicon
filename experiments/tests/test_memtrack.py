@@ -70,7 +70,6 @@ class MemtrackTest(unittest.TestCase):
         op, = memtrack.derive(events)['operators']
         self.assertEqual(op['peak_bytes'], 600)        # 300 outputs + 300 table
         self.assertEqual(op['peak_bytes_net'], 370)    # 70 outputs + 300 table
-        self.assertEqual(op['shrunk_bytes'], 230)
         self.assertEqual(op['retained_bytes'], 70)
         # Net: 70 for 1 s, 370 for 1 s, 70 for 3 s.
         self.assertAlmostEqual(op['integral_mib_seconds_net'] * 1024 ** 2, 70 + 370 + 210)

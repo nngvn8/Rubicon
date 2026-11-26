@@ -90,7 +90,7 @@ void OperatorDispatcher::dispatch(const uint64_t target_uuid, WorkItem witem) co
         {
             memtrack::OperatorScope scope(witem);
             t.response = std::move(op->run());
-            scope.finish(t.response);
+            scope.finish();
         }
     } else {
         LOG_ERROR("[OperatorDispatcher] Operator not supported:\n"

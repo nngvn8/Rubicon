@@ -70,8 +70,6 @@ inline constexpr uint32_t kFileVersion = 2;
 // Per-thread state. Reset by OperatorScope at the start and end of every operator.
 struct ThreadCtx {
     Owner owner;                   // operator currently running on this thread
-    uint64_t allocCount = 0;       // number of allocation calls (outputs and temporaries)
-    uint64_t requested = 0;        // bytes requested for outputs (capacity, not touched bytes)
     int64_t tempLive = 0;          // bytes held right now by temporary containers
     int64_t tempLogged = 0;        // tempLive at the time of the last snapshot
     struct Booked {
@@ -145,8 +143,6 @@ inline Owner currentOwner() { return ctx.owner; }
 // Book a freshly allocated output buffer of `bytes` to the running operator.
 inline void onAlloc(const void* p, size_t bytes) {
     if (!ctx.owner.valid) return;  // outside an operator: not tracked
-    ++ctx.allocCount;
-    ctx.requested += bytes;
     const uint32_t id = nextBufId.fetch_add(1, std::memory_order_relaxed) + 1;  // 0 means "no buffer"
     ctx.booked.push_back({p, bytes, id});
     record(ctx.owner, +int64_t(bytes), Kind::Alloc, id);
@@ -195,7 +191,6 @@ inline void maybeSnapshot() {
 inline void onTempAlloc(size_t bytes) {
     if (!ctx.owner.valid) return;
     ctx.tempLive += int64_t(bytes);
-    ++ctx.allocCount;
     maybeSnapshot();
 }
 inline void onTempFree(size_t bytes) {
@@ -239,14 +234,9 @@ class OperatorScope {
         record(ctx.owner, 0, Kind::TempLevel);  // start snapshot
     }
 
-    // Call after run(): writes the end snapshot and the per-operator numbers into the response.
-    void finish(WorkResponse& r) {
+    // Call after run(): writes the end snapshot.
+    void finish() {
         record(ctx.owner, ctx.tempLive, Kind::TempLevel);  // end snapshot, should be 0
-        if (!r.has_extendedresult()) return;               // only when the benchmark asked for it
-        auto* e = r.mutable_extendedresult();
-        e->set_minorfaults(minorFaults() - faults0_);  // x 4096 bytes in the analysis
-        e->set_allocationcount(ctx.allocCount);
-        e->set_requestedbytes(ctx.requested);
     }
 
     ~OperatorScope() {
@@ -278,7 +268,7 @@ template <class T>
 using TempAlloc = std::allocator<T>;
 struct OperatorScope {
     explicit OperatorScope(const WorkItem&) {}
-    void finish(WorkResponse&) {}
+    void finish() {}
 };
 
 #endif  // RAM_TRACKING

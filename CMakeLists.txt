@@ -71,7 +71,7 @@ add_executable(computeUnit computeUnit/ComputeUnit.cpp ${CU_SOURCES} ${CU_HEADER
 target_include_directories(computeUnit PRIVATE ${CU_INC_DIR} ${EXT_DIR} ${SIMDOPS_TSL_ROOT} ${SIMDOPS_INCLUDE})
 target_link_libraries(computeUnit ${PTHREAD_LIB} ${NUMA_LIB} "tsl" proto_lib)
 target_compile_definitions(computeUnit PRIVATE DEFAULT_LOG_LEVEL="${LOG_LEVEL}")
-option(RAM_TRACKING "Per-operator memory tracking in computeUnit" OFF)
+option(RAM_TRACKING "Per-operator memory tracking in computeUnit" ON)
 if(RAM_TRACKING)
     target_compile_definitions(computeUnit PRIVATE RAM_TRACKING)
 endif()

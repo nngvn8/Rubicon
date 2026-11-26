@@ -15,74 +15,69 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from utils.memory import MIB, MemorySession, _collect, aligned_operators, integrate, load_samples, process_identity, read_rss
-from proto import NetworkRequests_pb2, QueryPlan_pb2, WorkRequest_pb2, WorkResponse_pb2
+from utils.memory import MIB, MemorySession, integrate
+from utils.memory_collector import collect_samples, load_samples, process_identity, read_rss
+from utils import memtrack
+from proto import ConfigurationRequests_pb2, NetworkRequests_pb2, QueryPlan_pb2, WorkRequest_pb2, WorkResponse_pb2
 from proto.UnitDefinition_pb2 import TcpPackageType, UnitType
 import run_query
 
 
 def sample(seconds, mib):
-    ns = int(seconds * 1e9)
-    return {'timestamp_ns': ns, 'read_start_ns': ns, 'read_end_ns': ns,
-            'rss_bytes': int(mib * MIB)}
+    return {'timestamp_ns': int(seconds * 1e9), 'rss_bytes': int(mib * MIB)}
+
+
+def integral(samples, start_s, end_s):
+    return integrate(samples, [s['timestamp_ns'] for s in samples], int(start_s * 1e9), int(end_s * 1e9))
 
 
 class IntegralTests(unittest.TestCase):
-    def test_constant_interpolated_boundaries_and_signed_baseline(self):
-        result = integrate([sample(0, 10), sample(1, 10), sample(2, 10)],
-                           250_000_000, 1_750_000_000, 12 * MIB, 2_000_000_000)
-        self.assertTrue(result['coverage_complete'])
-        self.assertEqual(result['integral_mib_seconds'], 15)
-        self.assertEqual(result['baseline_integral_mib_seconds'], -3)
+    def test_constant_with_interpolated_boundaries(self):
+        result = integral([sample(0, 10), sample(1, 10), sample(2, 10), sample(3, 10)], 0.25, 2.75)
+        self.assertEqual(result['integral_mib_seconds'], 25)
         self.assertEqual(result['average_rss_mib'], 10)
+        self.assertEqual(result['duration_seconds'], 2.5)
+        self.assertFalse(result['interpolated_only'])
 
     def test_ramp(self):
-        result = integrate([sample(0, 0), sample(1, 10), sample(2, 20)],
-                           500_000_000, 1_500_000_000, 0, 2_000_000_000)
+        result = integral([sample(0, 0), sample(1, 10), sample(2, 20)], 0.5, 1.5)
         self.assertEqual(result['integral_mib_seconds'], 10)
-        self.assertEqual(result['start_rss_mib'], 5)
 
-    def test_no_extrapolation_or_gap_bridging(self):
+    def test_interval_between_two_samples_is_interpolated_only(self):
+        result = integral([sample(0, 0), sample(2, 20)], 0.5, 1.5)
+        self.assertEqual(result['integral_mib_seconds'], 10)
+        self.assertTrue(result['interpolated_only'])
+
+    def test_no_extrapolation_and_empty_interval(self):
         samples = [sample(1, 10), sample(3, 10)]
-        for start, end, gap, issue in [(0, 2, 5, 'window_not_bracketed_by_samples'),
-                                      (1, 3, 1, 'sample_gap_exceeds_limit')]:
-            result = integrate(samples, start * 10**9, end * 10**9, 0, gap * 10**9)
-            self.assertFalse(result['coverage_complete'])
-            self.assertIsNone(result['integral_mib_seconds'])
-            self.assertIn(issue, result['issues'])
-
-    def test_slow_reads_are_flagged(self):
-        samples = [sample(0, 10), sample(1, 10)]
-        samples[0]['read_end_ns'] = 2_000_000_000
-        self.assertIn('sample_read_exceeds_gap_limit',
-                      integrate(samples, 0, 10**9, 0, 10**9)['issues'])
+        self.assertIsNone(integral(samples, 0, 2))
+        self.assertIsNone(integral(samples, 2, 4))
+        self.assertIsNone(integral(samples, 2, 2))
 
 
-class ProcAndClockTests(unittest.TestCase):
-    def test_collector_auto_fallback_permissions_and_pid_reuse(self):
-        for scenario in ('auto', 'permission', 'reuse'):
+class ProcAndSamplerTests(unittest.TestCase):
+    def test_collector_samples_permissions_and_pid_reuse(self):
+        for scenario in ('ok', 'permission', 'reuse'):
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as tmp:
                 messages = []
                 pipe = SimpleNamespace(send=messages.append, close=lambda: None)
                 stop = threading.Event()
                 stop.set()  # Read one final sample, then stop.
-                def rss(pid, source):
+                def rss(pid):
                     if scenario == 'permission':
                         raise PermissionError('denied')
-                    if source == 'smaps_rollup':
-                        time.sleep(0.002)
                     return MIB
-                identities = ['old', 'old', 'new'] if scenario == 'reuse' else None
-                with patch('utils.memory.read_rss', side_effect=rss), \
-                     patch('utils.memory.process_identity', side_effect=identities, return_value='old'):
-                    _collect(123, 'auto' if scenario == 'auto' else 'status',
-                             0.001, str(Path(tmp) / 'samples.csv'), stop, pipe)
-                if scenario == 'auto':
-                    self.assertEqual(messages[0]['source'], 'status')
-                    self.assertEqual(messages[-1]['type'], 'stopped')
+                identities = ['old', 'new'] if scenario == 'reuse' else None
+                with patch('utils.memory_collector.read_rss', side_effect=rss), \
+                     patch('utils.memory_collector.process_identity', side_effect=identities, return_value='old'):
+                    collect_samples(123, 0.001, str(Path(tmp) / 'samples.csv'), stop, pipe)
+                if scenario == 'ok':
+                    self.assertEqual([m['type'] for m in messages], ['ready', 'stopped'])
+                    self.assertEqual(messages[-1]['sample_count'], 1)
+                    self.assertEqual(load_samples(Path(tmp) / 'samples.csv')[0]['rss_bytes'], MIB)
                 else:
                     self.assertEqual(messages[-1]['type'], 'error')
-                    self.assertIn('denied' if scenario == 'permission' else 'changed', messages[-1]['error'])
+                    self.assertIn('denied' if scenario == 'permission' else 'reused', messages[-1]['error'])
 
     def test_units_missing_fields_and_process_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -90,28 +85,24 @@ class ProcAndClockTests(unittest.TestCase):
             proc = root / '123'
             proc.mkdir()
             (proc / 'status').write_text('Name: CU\nVmRSS: 42 kB\n')
-            self.assertEqual(read_rss(123, 'status', root), 42 * 1024)
-            (proc / 'smaps_rollup').write_text('Rss: 43 kB\n')
-            self.assertEqual(read_rss(123, 'smaps_rollup', root), 43 * 1024)
+            self.assertEqual(read_rss(123, root), 42 * 1024)
             (proc / 'stat').write_text('123 (CU (name) with spaces) S ' + ' '.join(['0'] * 18 + ['987']))
             self.assertEqual(process_identity(123, root), '987')
             (proc / 'status').write_text('VmSize: 100 kB\n')
             with self.assertRaises(ValueError):
-                read_rss(123, 'status', root)
+                read_rss(123, root)
             with self.assertRaises(FileNotFoundError):
                 process_identity(124, root)
 
-    def test_explicit_clock_anchor_and_rejection(self):
-        response = WorkResponse_pb2.PlanResponse(operatorClockNs=101_000_000_000,
-            collectorClockNs=1_000_000_000, clockAnchorUncertaintyNs=50)
-        response.extendedResults.add(itemId=9, start=100_200_000_000, end=100_800_000_000)
-        ops, error = aligned_operators(response, 0.1, 0.9)
-        self.assertIsNone(error)
-        self.assertEqual(ops[0]['start_ns'], 200_000_000)
-        self.assertEqual(ops[0]['end_ns'], 800_000_000)
-        self.assertTrue(aligned_operators(response, 0.3, 0.9)[1])
-        response.ClearField('operatorClockNs')
-        self.assertTrue(aligned_operators(response, 0.1, 0.9)[1])
+    def test_long_sampling_gap_is_warned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = MemorySession(os.getpid(), Path(tmp), interval_ms=10)
+            (Path(tmp) / 'memory_samples.csv').write_text(
+                'timestamp_ns,rss_bytes\n0,1\n10000000,1\n500000000,1\n')
+            session.finish()
+            summary = json.loads((Path(tmp) / 'memory_summary.json').read_text())
+            self.assertEqual(len(summary['metadata']['warnings']), 1)
+            self.assertEqual(summary['metadata']['max_sample_interval_ms'], 490)
 
     def test_live_sampler_detects_resident_growth_and_stops(self):
         code = ('import sys\nprint("ready", flush=True)\nsys.stdin.readline()\n'
@@ -121,8 +112,7 @@ class ProcAndClockTests(unittest.TestCase):
                 [sys.executable, '-u', '-c', code], stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, text=True) as target:
             self.assertEqual(target.stdout.readline().strip(), 'ready')
-            session = MemorySession(target.pid, Path(tmp), source='smaps_rollup',
-                                    interval_ms=5, baseline_ms=40, tail_ms=20)
+            session = MemorySession(target.pid, Path(tmp), interval_ms=5, baseline_ms=40, tail_ms=20)
             try:
                 session.start()
                 session.baseline()
@@ -145,8 +135,7 @@ class ProcAndClockTests(unittest.TestCase):
     def test_target_exit_is_reported_and_partial_artifacts_survive(self):
         with tempfile.TemporaryDirectory() as tmp, subprocess.Popen(
                 [sys.executable, '-c', 'import time; time.sleep(30)']) as target:
-            session = MemorySession(target.pid, Path(tmp), source='status',
-                                    interval_ms=5, baseline_ms=30, tail_ms=20)
+            session = MemorySession(target.pid, Path(tmp), interval_ms=5, baseline_ms=30, tail_ms=20)
             try:
                 session.start()
                 target.terminate()
@@ -165,8 +154,10 @@ class FakeClient:
     """Deterministic protocol peer; concurrent responses finish out of order."""
     instances = []
     failed = False
+    memlog = None  # log file of the pretend CU; set by the test
 
     def __init__(self, **kwargs):
+        self.flushes = 0
         self.callbacks = {}
         self.uuid = 10
         self.connection_up = True
@@ -185,6 +176,18 @@ class FakeClient:
             reply = NetworkRequests_pb2.UuidForUnitResponse(names=['ComputeUnit'], uuids=[99],
                                                            requestedUnitType=UnitType.COMPUTE_UNIT)
             self.callbacks[TcpPackageType.UUID_FOR_UNIT_RESPONSE](SimpleNamespace(payload=reply.SerializeToString()))
+        elif message.package_type == TcpPackageType.CONFIGURATION_ACTION:
+            item = ConfigurationRequests_pb2.ConfigurationItem()
+            item.ParseFromString(message.payload)
+            if item.type == ConfigurationRequests_pb2.ConfigType.FLUSH_MEMORY_LOG:
+                # Like the CU: append the new events to the log, then acknowledge with the flush number.
+                now = time.perf_counter_ns()
+                with open(self.memlog, 'ab') as log:
+                    log.write(memtrack.EVENT.pack(now, 1, 1, 100, memtrack.TEMP, 0))
+                    log.write(memtrack.EVENT.pack(now + 1000, 1, 1, 0, memtrack.TEMP, 0))
+                self.flushes += 1
+                text = f'[ComputeUnit] Memory log flushed to {self.memlog} (flush #{self.flushes})'
+                self.callbacks[TcpPackageType.TEXT](SimpleNamespace(payload=text.encode()))
         elif message.package_type == TcpPackageType.QUERY_PLAN:
             request = WorkRequest_pb2.WorkRequest()
             request.ParseFromString(message.payload)
@@ -193,11 +196,8 @@ class FakeClient:
             def complete():
                 end = time.perf_counter_ns()
                 reply = WorkResponse_pb2.PlanResponse(planId=plan.planid, success=not self.failed,
-                    info='failure' if self.failed else run_query.PLAN_SUCCESS_INFO,
-                    operatorClockNs=end + 10**12, collectorClockNs=end,
-                    clockAnchorUncertaintyNs=100, computeUnitPid=os.getpid(),
-                    computeUnitHost=os.uname().nodename)
-                reply.extendedResults.add(itemId=1, start=start + 10**12, end=end + 10**12, rowCount=1)
+                    info='failure' if self.failed else run_query.PLAN_SUCCESS_INFO)
+                reply.extendedResults.add(itemId=1, start=start, end=end, rowCount=1)
                 self.callbacks[TcpPackageType.PLAN_RESPONSE](SimpleNamespace(payload=reply.SerializeToString()))
             timer = threading.Timer(0.09 if plan.planitems[0].itemId == 1 else 0.04, complete)
             self.timers.append(timer)
@@ -224,9 +224,9 @@ class ComputeUnitDiscoveryTests(unittest.TestCase):
                     return_value=SimpleNamespace(stdout=listing)):
                 if error:
                     with self.assertRaises(error):
-                        run_query.running_compute_unit()
+                        run_query.running_compute_unit(user='user')
                 else:
-                    result = run_query.running_compute_unit()
+                    result = run_query.running_compute_unit(user='user')
                     self.assertEqual((result['cu_pid'], result['scale_factor'], result['workers_per_cu']),
                                      (123, 2, 48))
                     self.assertEqual((result['ip'], result['port'], result['node'], result['cxl_node']),
@@ -244,9 +244,15 @@ class RunnerIntegrationTests(unittest.TestCase):
         config = root / 'config.yaml'
         config.write_text('benchmark:\n  runs: 2\n  warmup_runs: 1\n')
         argv = ['run_query.py', '--config', str(config), '-f', str(plans), '--execution-mode', mode]
+        memlog = root / 'memtrack.bin'
         if enabled:
-            argv += ['--measure-memory', '--memory-source', 'status',
+            argv += ['--memtrack', '--memlog', str(memlog),
                      '--memory-interval-ms', '5', '--memory-baseline-ms', '40', '--memory-tail-ms', '20']
+        else:
+            argv += ['--no-memtrack']
+        # Header only; the pretend CU appends events on every flush.
+        memlog.write_bytes(memtrack.HEADER.pack(memtrack.MAGIC, memtrack.VERSION, memtrack.EVENT.size, 16, 0))
+        FakeClient.memlog = memlog
         FakeClient.failed = failed
         original_import = __import__
         def collection_import(name, *args, **kwargs):
@@ -276,13 +282,17 @@ class RunnerIntegrationTests(unittest.TestCase):
                 old_handler = signal.getsignal(signal.SIGTERM)
                 path, result = self.run_benchmark(Path(tmp), mode)
                 memory = json.loads((path.parent / result['memory']['summary']).read_text())
-                rounds = [w for w in memory['windows'] if w['kind'] == 'round']
-                plans = [w for w in memory['windows'] if w['kind'] == 'plan']
-                self.assertEqual(len(rounds), 3)
-                self.assertEqual(len(memory['operators']), 6)
-                self.assertTrue(all(w['memory']['coverage_complete'] for w in rounds))
-                self.assertEqual(sum(w['warmup'] for w in rounds), 1)
-                self.assertEqual([w['round'] for w in rounds], [1, 1, 2])
+                plans = memory['plans']
+                self.assertEqual(len(plans), 6)
+                self.assertEqual(sum(w['warmup'] for w in plans), 2)
+                self.assertEqual([w['round'] for w in plans], [1, 1, 1, 1, 2, 2])
+                self.assertTrue(all(w['rss'] for w in plans))
+                self.assertEqual(memory['metadata']['errors'], [])
+                self.assertTrue((path.parent / 'memtrack_events.csv').exists())
+                self.assertEqual(memory['operator_tracking']['events_dropped'], 0)
+                self.assertTrue(memory['operator_tracking']['operators'])
+                # one flush after each of the 3 rounds, one more in finish()
+                self.assertEqual(FakeClient.instances[-1].flushes, 4)
                 self.assertEqual(len(result['queries']['q1.pb']['samples']), 2)
                 self.assertGreater(memory['metadata']['baseline_sample_count'], 1)
                 # A separate benchmark_plotting invocation renders these artifacts.
@@ -305,11 +315,20 @@ class RunnerIntegrationTests(unittest.TestCase):
             self.assertFalse((path.parent / 'memory_samples.csv').exists())
             self.assertNotIn('plan_id', result['queries']['q1.pb']['samples'][0])
 
+    def test_memtrack_requires_written_results(self):
+        argv = ['run_query.py', '-f', 'unused', '--no-write-benchmark-results', '--memtrack']
+        with patch.object(run_query, 'running_compute_unit', return_value={'cu_pid': os.getpid()}), \
+             patch.object(sys, 'argv', argv), contextlib.redirect_stderr(io.StringIO()) as stderr:
+            with self.assertRaises(SystemExit) as raised:
+                run_query.main()
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn('--memtrack requires --write-benchmark-results', stderr.getvalue())
+
     def test_failed_plans_still_save_memory(self):
         with tempfile.TemporaryDirectory() as tmp:
             path, result = self.run_benchmark(Path(tmp), 'concurrent', failed=True)
             memory = json.loads((path.parent / result['memory']['summary']).read_text())
-            self.assertTrue(all(not w['success'] for w in memory['windows'] if w['kind'] == 'plan'))
+            self.assertTrue(all(not w['success'] for w in memory['plans']))
             self.assertTrue(FakeClient.instances[-1].disconnected)
 
     def test_interrupt_preserves_trace_and_stops_collector(self):
