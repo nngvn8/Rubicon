@@ -25,7 +25,7 @@ TIMEOUT_SECONDS=20              # Per-plan budget; scaled by plan count per batc
 VERBOSE=false                   # Dump full run_query.py output per invocation
 LOG_CU=false                    # Write CU log to testing/logs/cu-<timestamp>.log
 LOG_GROUPER=false               # Write Grouper log to testing/logs/grouper-<timestamp>.log
-RESTART_CU=false                # Restart CU after every single plan
+ALWAYS_RESTART_CU=false         # Restart CU after every single plan
 RESTART_BETWEEN_ROUNDS=false    # Start a fresh CU at the start of every round
 PLAN_SOURCE=pb_plans            # Subdirectory of data/ to run: pb_plans | plans
 QUERY_PREFIXES=()               # Filename prefixes selected via --q
@@ -108,7 +108,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -r|--restart-cu)
-            RESTART_CU=true
+            ALWAYS_RESTART_CU=true
             shift
             ;;
         -b|--benchmark)
@@ -329,11 +329,11 @@ run_selection() {
 
     # Warmups and non-benchmark runs skip result and memory collection.
     if [[ "$IS_WARMUP" == true ]]; then
-        args+=(--no-write-benchmark-results --no-measure-memory)
+        args+=(--no-write-benchmark-results --no-memtrack)
     elif [[ "$WRITE_BENCHMARK_RESULTS" == true ]]; then
         args+=(--write-benchmark-results)
     else
-        args+=(--no-write-benchmark-results --no-measure-memory)
+        args+=(--no-write-benchmark-results --no-memtrack)
     fi
     local output="$LOG_DIR/${label}.log"
 
@@ -390,7 +390,7 @@ for ((ROUND=1; ROUND<=TOTAL_ROUNDS; ROUND++)); do
     echo "Running $ROUND_LABEL ($TOTAL_PLANS plans)"
 
     # Per-query restarts: one invocation per plan. Otherwise: one invocation for the whole directory.
-    if [[ "$RESTART_CU" == true ]]; then
+    if [[ "$ALWAYS_RESTART_CU" == true ]]; then
         run_with_query_restarts || exit 1
     else
         run_selection "$ACTIVE_DIR" "$TOTAL_PLANS" "$ROUND_LABEL"
