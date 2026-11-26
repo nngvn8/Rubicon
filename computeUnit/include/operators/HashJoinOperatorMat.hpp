@@ -56,7 +56,7 @@ class HashJoinOperatorMat : public AbstractOperator {
                         const uint64_t chunkElements = 1024 * 1024 * 4) {
         static_assert(std::is_arithmetic_v<base_t>, "[HashJoinOperator] Could not deduce base_t for WorkItem");
         auto joinData = m_work_item.joinmatdata();
-        
+
         // Check if position lists have type Datatype position lists
         if ((innerPositions && innerPositions->datatype != DataType::position_list) ||
             (outerPositions && outerPositions->datatype != DataType::position_list)) {
@@ -64,83 +64,89 @@ class HashJoinOperatorMat : public AbstractOperator {
         }
 
         // Set inner and outer element count based on position list or column data
-        const size_t innerElements = innerPositions ? innerPositions->elements : innerColumn->elements;
-        const size_t outerElements = outerPositions ? outerPositions->elements : outerColumn->elements;
+        const size_t innerElementCount = innerPositions ? innerPositions->elements : innerColumn->elements;
+        const size_t outerElementCount = outerPositions ? outerPositions->elements : outerColumn->elements;
 
         // Allocating result data for the join
         tsl::executor<tsl::runtime::cpu> exec;
-        size_t* join_result_id_a = memtrack::tracked_allocate<size_t>(exec, outerElements);
-        size_t* join_result_id_b = memtrack::tracked_allocate<size_t>(exec, outerElements);
+        size_t* join_result_id_a = memtrack::tracked_allocate<size_t>(exec, outerElementCount);
+        size_t* join_result_id_b = memtrack::tracked_allocate<size_t>(exec, outerElementCount);
 
         LOG_DEBUG2("[HashJoinOperator] Starting Hash-Phase." << std::endl;)
-        innerColumn->wait_data_allocated();
 
-        std::vector<base_t, memtrack::TempAlloc<base_t>> materializedInner;  // temporary, counted by the allocator
-        const base_t* innerKeys = nullptr;
+        auto hash_table = hash_join::allocate_hash_table<base_t>(innerElementCount);
 
-        // If position list for inner column has been provided
-        if (innerPositions) {
-            innerPositions->wait_data_allocated();
-            materializedInner.resize(innerElements);
+        if (innerElementCount != 0) {
+            innerColumn->wait_data_allocated();
 
-            if (innerElements != 0) {
+            // If position list for inner column has been provided
+            if (innerPositions) {
+                std::vector<base_t, memtrack::TempAlloc<base_t>> materializedInner(std::min<size_t>(chunkElements, innerElementCount));  // temporary, counted by the allocator
+
+                innerPositions->wait_data_allocated();
                 View<size_t> positionChunk(static_cast<size_t*>(innerPositions->data), chunkElements, innerPositions);
-                size_t materialized = 0;
+
+                size_t inserted = 0;
                 while (true) {
-                    
-                    // Materialize one chunk of the inner column
-                    const size_t positionCount = positionChunk.getNumberOfElements();
-                    materializePositionChunk<base_t>(innerColumn, positionChunk.begin(), positionCount, materializedInner.data() + materialized);
-                    materialized += positionCount;
+
+                    // Materialize one chunk of the inner column and insert into hash table
+                    const size_t chunkSize = positionChunk.getNumberOfElements();
+                    materializePositionChunk<base_t>(innerColumn, positionChunk.begin(), chunkSize, materializedInner.data());
+                    hash_join::insert_chunk(hash_table, materializedInner.data(), chunkSize, inserted);
+                    inserted += chunkSize;
 
                     if (positionChunk.isLastChunk()) break;
                     ++positionChunk;
                 }
+
+            // Build the hash table directly from data provided
+            } else {
+                View<base_t> dataChunk(static_cast<base_t*>(innerColumn->data), chunkElements, innerColumn);
+                size_t inserted = 0;
+
+                // Insert one chunk at a time to overlap data transfer with hash table building
+                while (true) {
+                    const size_t chunkSize = dataChunk.getNumberOfElements();
+                    hash_join::insert_chunk(hash_table, dataChunk.begin(), chunkSize, inserted);
+                    inserted += chunkSize;
+
+                    if (dataChunk.isLastChunk()) break;
+                    ++dataChunk;
+                }
             }
-            innerKeys = materializedInner.data();
-        
-        // Build the hash table directly from data provided
-        } else if (innerElements != 0) {
-            // Wait for the data to be available
-            View<base_t> completeInner(static_cast<base_t*>(innerColumn->data), innerElements, innerColumn);
-            innerKeys = completeInner.begin();
         }
 
-        const auto hash_table = hash_join::build_hash_table(innerKeys, innerElements);
+
         LOG_DEBUG2("[HashJoinOperator] Finished Hash-Phase." << std::endl;)
 
-        size_t join_result = 0;
-
         LOG_DEBUG2("[HashJoinOperator] Starting Probe-Phase." << std::endl;)
+        size_t join_result = 0;
         size_t position_offset = 0;
-
         outerColumn->wait_data_allocated();
+
         // If position list for outer column has been provided
         if (outerPositions) {
+            std::vector<base_t, memtrack::TempAlloc<base_t>> materializedOuter(std::min<size_t>(chunkElements, outerElementCount));
             outerPositions->wait_data_allocated();
-            std::vector<base_t> materializedOuter(std::min<size_t>(chunkElements, outerElements));
+            View<size_t> positionChunk(static_cast<size_t*>(outerPositions->data), chunkElements, outerPositions);
 
-            if (outerElements != 0) {
-                View<size_t> positionChunk(static_cast<size_t*>(outerPositions->data), chunkElements, outerPositions);
-                while (true) {
-                    
-                    // One chunk at a time materialize and probe outer column
-                    const size_t positionCount = positionChunk.getNumberOfElements();
-                    materializePositionChunk<base_t>(outerColumn, positionChunk.begin(), positionCount, materializedOuter.data());
-                    join_result += hash_join::probe_hash_table(hash_table, materializedOuter.data(), positionCount, position_offset,
-                                                                join_result_id_a + join_result, join_result_id_b + join_result);
-                    position_offset += positionCount;
+            while (true) {
+                // One chunk at a time materialize and probe outer column
+                const size_t chunkSize = positionChunk.getNumberOfElements();
+                materializePositionChunk<base_t>(outerColumn, positionChunk.begin(), chunkSize, materializedOuter.data());
+                join_result += hash_join::probe_hash_table(hash_table, materializedOuter.data(), chunkSize, position_offset,
+                                                            join_result_id_a + join_result, join_result_id_b + join_result);
+                position_offset += chunkSize;
 
-                    if (positionChunk.isLastChunk()) break;
-                    ++positionChunk;
-                }
+                if (positionChunk.isLastChunk()) break;
+                ++positionChunk;
             }
-        
-            // Do probing based on column data directly
-        } else if (outerElements != 0) {
+
+        // Do probing based on column data directly
+        } else {
             View<base_t> outerChunk(static_cast<base_t*>(outerColumn->data), chunkElements, outerColumn);
             while (true) {
-                
+
                 // Probe one chunk at a time
                 const size_t elementCount = outerChunk.getNumberOfElements();
                 join_result += hash_join::probe_hash_table(hash_table, outerChunk.begin(), elementCount, position_offset,
@@ -151,6 +157,7 @@ class HashJoinOperatorMat : public AbstractOperator {
                 ++outerChunk;
             }
         }
+
         LOG_DEBUG2("[HashJoinOperator] Finished Probe-Phase." << std::endl;)
 
         const uint64_t size_in_bytes_a = join_result * sizeof(size_t);

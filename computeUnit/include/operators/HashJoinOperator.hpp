@@ -25,14 +25,25 @@ class HashJoinOperator : public AbstractOperator {
         size_t* join_result_id_b = memtrack::tracked_allocate<size_t>(exec, outerColumn->elements);
 
         LOG_DEBUG2("[HashJoinOperator] Starting Hash-Phase." << std::endl;)
-        innerColumn->wait_data_allocated();
 
         // Build Hash table when inner column fully available
-        View<base_t> innerChunk(static_cast<base_t*>(innerColumn->data), innerColumn->elements, innerColumn);
-        const auto* inner_keys = innerChunk.begin();
-        const auto hash_table = hash_join::build_hash_table(inner_keys, innerChunk.getNumberOfElements());
+        auto hash_table = hash_join::allocate_hash_table<base_t>(innerColumn->elements);
+
+        innerColumn->wait_data_allocated();
+        View<base_t> innerChunk(static_cast<base_t*>(innerColumn->data), chunkElements, innerColumn);
+
+        size_t inserted = 0;
+        while (true) {
+            const size_t chunkSize = innerChunk.getNumberOfElements();
+            hash_join::insert_chunk(hash_table, innerChunk.begin(), chunkSize, inserted);
+            inserted += chunkSize;
+
+            if (innerChunk.isLastChunk()) break;
+            ++innerChunk;
+        }
         LOG_DEBUG2("[HashJoinOperator] Finished Hash-Phase." << std::endl;)
 
+        outerColumn->wait_data_allocated();
         View outerChunk = View<base_t>(static_cast<base_t*>(outerColumn->data), chunkElements, outerColumn);
 
         size_t join_result = 0;
@@ -41,11 +52,10 @@ class HashJoinOperator : public AbstractOperator {
         size_t position_offset = 0;
         while (true) {
             join_result += hash_join::probe_hash_table(hash_table, outerChunk.begin(), outerChunk.getNumberOfElements(), position_offset, join_result_id_a + join_result, join_result_id_b + join_result);
-            if (outerChunk.isLastChunk()) {
-                break;
-            }
+
+            if (outerChunk.isLastChunk()) break;
             position_offset += outerChunk.getNumberOfElements();
-            outerChunk++;
+            ++outerChunk;
         }
         LOG_DEBUG2("[HashJoinOperator] Finished Probe-Phase." << std::endl;)
 

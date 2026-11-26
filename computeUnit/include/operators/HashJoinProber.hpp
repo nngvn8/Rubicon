@@ -12,7 +12,7 @@ using HashTable = std::unordered_map<KeyT, size_t, std::hash<KeyT>, std::equal_t
                                      memtrack::TempAlloc<std::pair<const KeyT, size_t>>>;
 
 /**
- * Build a hash table that retains the first position for every inner key.
+ * Build complete hash table that retains the first position for every inner key.
  */
 template <typename KeyT>
 HashTable<KeyT> build_hash_table(const KeyT* keys, size_t key_count) {
@@ -20,10 +20,31 @@ HashTable<KeyT> build_hash_table(const KeyT* keys, size_t key_count) {
     table.reserve(key_count);
 
     for (size_t position = 0; position < key_count; ++position) {
-        table.try_emplace(keys[position], position);
+        table.try_emplace(keys[position], position); // Retain first entry
+        // table.insert_or_assign(keys[position], position); // Retain last entry
     }
 
     return table;
+}
+
+/** 
+ * Allocate an empty hash table with reserved space for the specified number of keys.
+*/
+template <typename KeyT>
+HashTable<KeyT> allocate_hash_table(size_t key_count) {
+    HashTable<KeyT> table;
+    table.reserve(key_count);
+    return table;
+}
+
+/**
+ * Insert all keys of a chunk into the hash table, using the specified offset for positions.
+ */
+template <typename KeyT>
+void insert_chunk(HashTable<KeyT>& table, const KeyT* keys, size_t key_count, size_t offset) {
+    for (size_t position = 0; position < key_count; position++){
+        table.try_emplace(keys[position], offset + position);
+    }
 }
 
 /**
